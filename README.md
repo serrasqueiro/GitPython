@@ -3,6 +3,8 @@
 GitPython is a python library used to interact with git repositories, high-level like git-porcelain,
 or low-level like git-plumbing.
 
+This repo is a fork from the original GitPython.
+
 It provides abstractions of git objects for easy access of repository data, and additionally
 allows you to access the git repository more directly using either a pure python implementation,
 or the faster, but more resource intensive *git command* implementation.
@@ -10,6 +12,17 @@ or the faster, but more resource intensive *git command* implementation.
 The object database implementation is optimized for handling large quantities of objects and large datasets,
 which is achieved by using low-level structures and data streaming.
 
+
+### THIS FORK
+
+To sync this fork [git fork](https://github.com/serrasqueiro/GitPython.git), use:
+```bash
+git remote remove upstream
+git_after_fork https://github.com/gitpython-developers/GitPython
+git fetch upstream
+git checkout master
+git pull
+```
 
 ### REQUIREMENTS
 
