@@ -1,21 +1,19 @@
-# test_actor.py
 # Copyright (C) 2008, 2009 Michael Trier (mtrier@gmail.com) and contributors
 #
-# This module is part of GitPython and is released under
-# the BSD License: http://www.opensource.org/licenses/bsd-license.php
+# This module is part of GitPython and is released under the
+# 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
 
 from test.lib import TestBase
 from git import Actor
 
 
 class TestActor(TestBase):
-
     def test_from_string_should_separate_name_and_email(self):
         a = Actor._from_string("Michael Trier <mtrier@example.com>")
         self.assertEqual("Michael Trier", a.name)
         self.assertEqual("mtrier@example.com", a.email)
 
-        # base type capabilities
+        # Base type capabilities
         assert a == a
         assert not (a != a)
         m = set()

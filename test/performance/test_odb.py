@@ -1,16 +1,15 @@
-"""Performance tests for object store"""
-from __future__ import print_function
+# This module is part of GitPython and is released under the
+# 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
+
+"""Performance tests for object store."""
 
 import sys
 from time import time
 
-from .lib import (
-    TestBigRepoR
-)
+from .lib import TestBigRepoR
 
 
 class TestObjDBPerformance(TestBigRepoR):
-
     def test_random_access(self):
         results = [["Iterate Commits"], ["Iterate Blobs"], ["Retrieve Blob Data"]]
         for repo in (self.gitrorepo, self.puregitrorepo):
@@ -21,12 +20,15 @@ class TestObjDBPerformance(TestBigRepoR):
             nc = len(commits)
             elapsed = time() - st
 
-            print("%s: Retrieved %i commits from ObjectStore in %g s ( %f commits / s )"
-                  % (type(repo.odb), nc, elapsed, nc / elapsed), file=sys.stderr)
+            print(
+                "%s: Retrieved %i commits from ObjectStore in %g s ( %f commits / s )"
+                % (type(repo.odb), nc, elapsed, nc / elapsed),
+                file=sys.stderr,
+            )
             results[0].append(elapsed)
 
             # GET TREES
-            # walk all trees of all commits
+            # Walk all trees of all commits.
             st = time()
             blobs_per_commit = []
             nt = 0
@@ -35,16 +37,19 @@ class TestObjDBPerformance(TestBigRepoR):
                 blobs = []
                 for item in tree.traverse():
                     nt += 1
-                    if item.type == 'blob':
+                    if item.type == "blob":
                         blobs.append(item)
-                    # direct access for speed
+                    # Direct access for speed.
                 # END while trees are there for walking
                 blobs_per_commit.append(blobs)
             # END for each commit
             elapsed = time() - st
 
-            print("%s: Retrieved %i objects from %i commits in %g s ( %f objects / s )"
-                  % (type(repo.odb), nt, len(commits), elapsed, nt / elapsed), file=sys.stderr)
+            print(
+                "%s: Retrieved %i objects from %i commits in %g s ( %f objects / s )"
+                % (type(repo.odb), nt, len(commits), elapsed, nt / elapsed),
+                file=sys.stderr,
+            )
             results[1].append(elapsed)
 
             # GET BLOBS
@@ -62,13 +67,22 @@ class TestObjDBPerformance(TestBigRepoR):
             # END for each bloblist
             elapsed = time() - st
 
-            msg = "%s: Retrieved %i blob (%i KiB) and their data in %g s ( %f blobs / s, %f KiB / s )"\
-                % (type(repo.odb), nb, data_bytes / 1000, elapsed, nb / elapsed, (data_bytes / 1000) / elapsed)
+            msg = "%s: Retrieved %i blob (%i KiB) and their data in %g s ( %f blobs / s, %f KiB / s )" % (
+                type(repo.odb),
+                nb,
+                data_bytes / 1000,
+                elapsed,
+                nb / elapsed,
+                (data_bytes / 1000) / elapsed,
+            )
             print(msg, file=sys.stderr)
             results[2].append(elapsed)
         # END for each repo type
 
-        # final results
+        # Final results.
         for test_name, a, b in results:
-            print("%s: %f s vs %f s, pure is %f times slower" % (test_name, a, b, b / a), file=sys.stderr)
+            print(
+                "%s: %f s vs %f s, pure is %f times slower" % (test_name, a, b, b / a),
+                file=sys.stderr,
+            )
         # END for each result

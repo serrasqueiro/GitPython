@@ -8,9 +8,9 @@
 GitPython Tutorial
 ==================
 
-GitPython provides object model access to your git repository. This tutorial is composed of multiple sections, most of which explains a real-life usecase.
+GitPython provides object model access to your git repository. This tutorial is composed of multiple sections, most of which explain a real-life use case.
 
-All code presented here originated from `test_docs.py <https://github.com/gitpython-developers/GitPython/blob/master/test/test_docs.py>`_ to assure correctness. Knowing this should also allow you to more easily run the code for your own testing purposes, all you need is a developer installation of git-python.
+All code presented here originated from `test_docs.py <https://github.com/gitpython-developers/GitPython/blob/main/test/test_docs.py>`_ to assure correctness. Knowing this should also allow you to more easily run the code for your own testing purposes. All you need is a developer installation of git-python.
 
 Meet the Repo type
 ******************
@@ -66,7 +66,7 @@ Archive the repository contents to a tar file.
 Advanced Repo Usage
 ===================
 
-And of course, there is much more you can do with this type, most of the following will be explained in greater detail in specific tutorials. Don't worry if you don't understand some of these examples right away, as they may require a thorough understanding of gits inner workings.
+And of course, there is much more you can do with this type, most of the following will be explained in greater detail in specific tutorials. Don't worry if you don't understand some of these examples right away, as they may require a thorough understanding of git's inner workings.
 
 Query relevant repository paths ...
 
@@ -363,7 +363,7 @@ Handling Remotes
     :start-after: # [25-test_references_and_objects]
     :end-before: # ![25-test_references_and_objects]
 
-You can easily access configuration information for a remote by accessing options as if they where attributes. The modification of remote configuration is more explicit though.
+You can easily access configuration information for a remote by accessing options as if they were attributes. The modification of remote configuration is more explicit though.
 
 .. literalinclude:: ../../test/test_docs.py
     :language: python
@@ -391,7 +391,7 @@ Here's an example executable that can be used in place of the `ssh_executable` a
     ID_RSA=/var/lib/openshift/5562b947ecdd5ce939000038/app-deployments/id_rsa
     exec /usr/bin/ssh -o StrictHostKeyChecking=no -i $ID_RSA "$@"
 
-Please note that the script must be executable (i.e. `chomd +x script.sh`). `StrictHostKeyChecking=no` is used to avoid prompts asking to save the hosts key to `~/.ssh/known_hosts`, which happens in case you run this as daemon.
+Please note that the script must be executable (i.e. `chmod +x script.sh`). `StrictHostKeyChecking=no` is used to avoid prompts asking to save the hosts key to `~/.ssh/known_hosts`, which happens in case you run this as daemon.
 
 You might also have a look at `Git.update_environment(...)` in case you want to setup a changed environment more permanently.
 
@@ -413,7 +413,7 @@ If you obtained your submodule object by traversing a tree object which is not r
 you have to inform the submodule about its actual commit to retrieve the data from
 by using the ``set_parent_commit(...)`` method.
 
-The special :class:`RootModule <git.objects.submodule.root.RootModule>` type allows you to treat your master repository as root of a hierarchy of submodules, which allows very convenient submodule handling. Its ``update(...)`` method is reimplemented to provide an advanced way of updating submodules as they change their values over time. The update method will track changes and make sure your working tree and submodule checkouts stay consistent, which is very useful in case submodules get deleted or added to name just two of the handled cases.
+The special :class:`RootModule <git.objects.submodule.root.RootModule>` type allows you to treat your superproject (master repository) as root of a hierarchy of submodules, which allows very convenient submodule handling. Its ``update(...)`` method is reimplemented to provide an advanced way of updating submodules as they change their values over time. The update method will track changes and make sure your working tree and submodule checkouts stay consistent, which is very useful in case submodules get deleted or added to name just two of the handled cases.
 
 Additionally, GitPython adds functionality to track a specific branch, instead of just a commit. Supported by customized update methods, you are able to automatically update submodules to the latest revision available in the remote repository, as well as to keep track of changes and movements of these submodules. To use it, set the name of the branch you want to track to the ``submodule.$name.branch`` option of the *.gitmodules*  file, and use GitPython update methods on the resulting repository with the ``to_latest_revision`` parameter turned on. In the latter case, the sha of your submodule will be ignored, instead a local tracking branch will be updated to the respective remote branch automatically, provided there are no local changes. The resulting behaviour is much like the one of svn::externals, which can be useful in times.
 
@@ -509,14 +509,14 @@ The type of the database determines certain performance characteristics, such as
 
 GitDB
 =====
-The GitDB is a pure-python implementation of the git object database. It is the default database to use in GitPython 0.3. Its uses less memory when handling huge files, but will be 2 to 5 times slower when extracting large quantities small of objects from densely packed repositories::
+The GitDB is a pure-python implementation of the git object database. It is the default database to use in GitPython 0.3. It uses less memory when handling huge files, but will be 2 to 5 times slower when extracting large quantities of small objects from densely packed repositories::
 
     repo = Repo("path/to/repo", odbt=GitDB)
 
 
 GitCmdObjectDB
 ==============
-The git command database uses persistent git-cat-file instances to read repository information. These operate very fast under all conditions, but will consume additional memory for the process itself. When extracting large files, memory usage will be much higher than the one of the ``GitDB``::
+The git command database uses persistent git-cat-file instances to read repository information. These operate very fast under all conditions, but will consume additional memory for the process itself. When extracting large files, memory usage will be much higher than ``GitDB``::
 
     repo = Repo("path/to/repo", odbt=GitCmdObjectDB)
 
@@ -545,4 +545,3 @@ And even more ...
 There is more functionality in there, like the ability to archive repositories, get stats and logs, blame, and probably a few other things that were not mentioned here.
 
 Check the unit tests for an in-depth introduction on how each function is supposed to be used.
-
