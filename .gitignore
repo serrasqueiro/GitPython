@@ -10,6 +10,8 @@ __pycache__/
 # Transient editor files
 *.swp
 *~
+\#*#
+.#*#
 
 # Editor configuration
 nbproject
@@ -47,3 +49,6 @@ output.txt
 
 # Finder metadata
 .DS_Store
+
+# Files created by OSS-Fuzz when running locally
+fuzz_*.pkg.spec

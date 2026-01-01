@@ -14,7 +14,8 @@ import pathlib
 import pickle
 import sys
 import tempfile
-from unittest import mock, skip
+from unittest import mock
+from pathlib import Path
 
 import pytest
 
@@ -36,14 +37,11 @@ from git import (
     Submodule,
     Tree,
 )
-from git.exc import (
-    BadObject,
-    UnsafeOptionError,
-    UnsafeProtocolError,
-)
+from git.exc import BadObject
 from git.repo.fun import touch
 from git.util import bin_to_hex, cwd, cygpath, join_path_native, rmfile, rmtree
-from test.lib import TestBase, fixture, with_rw_directory, with_rw_repo
+
+from test.lib import TestBase, fixture, with_rw_directory, with_rw_repo, PathLikeMock
 
 
 def iter_flatten(lol):
@@ -106,6 +104,11 @@ class TestRepo(TestBase):
     @with_rw_repo("0.3.2.1")
     def test_repo_creation_pathlib(self, rw_repo):
         r_from_gitdir = Repo(pathlib.Path(rw_repo.git_dir))
+        self.assertEqual(r_from_gitdir.git_dir, rw_repo.git_dir)
+
+    @with_rw_repo("0.3.2.1")
+    def test_repo_creation_pathlike(self, rw_repo):
+        r_from_gitdir = Repo(PathLikeMock(rw_repo.git_dir))
         self.assertEqual(r_from_gitdir.git_dir, rw_repo.git_dir)
 
     def test_description(self):
@@ -217,285 +220,6 @@ class TestRepo(TestBase):
         # @-timestamp is the format used by git commit hooks.
         repo.index.commit("Commit messages", commit_date="@1400000000 +0000")
 
-    @with_rw_directory
-    def test_clone_from_pathlib(self, rw_dir):
-        original_repo = Repo.init(osp.join(rw_dir, "repo"))
-
-        Repo.clone_from(original_repo.git_dir, pathlib.Path(rw_dir) / "clone_pathlib")
-
-    @with_rw_directory
-    def test_clone_from_pathlib_withConfig(self, rw_dir):
-        original_repo = Repo.init(osp.join(rw_dir, "repo"))
-
-        cloned = Repo.clone_from(
-            original_repo.git_dir,
-            pathlib.Path(rw_dir) / "clone_pathlib_withConfig",
-            multi_options=[
-                "--recurse-submodules=repo",
-                "--config core.filemode=false",
-                "--config submodule.repo.update=checkout",
-                "--config filter.lfs.clean='git-lfs clean -- %f'",
-            ],
-            allow_unsafe_options=True,
-        )
-
-        self.assertEqual(cloned.config_reader().get_value("submodule", "active"), "repo")
-        self.assertEqual(cloned.config_reader().get_value("core", "filemode"), False)
-        self.assertEqual(cloned.config_reader().get_value('submodule "repo"', "update"), "checkout")
-        self.assertEqual(
-            cloned.config_reader().get_value('filter "lfs"', "clean"),
-            "git-lfs clean -- %f",
-        )
-
-    def test_clone_from_with_path_contains_unicode(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            unicode_dir_name = "\u0394"
-            path_with_unicode = os.path.join(tmpdir, unicode_dir_name)
-            os.makedirs(path_with_unicode)
-
-            try:
-                Repo.clone_from(
-                    url=self._small_repo_url(),
-                    to_path=path_with_unicode,
-                )
-            except UnicodeEncodeError:
-                self.fail("Raised UnicodeEncodeError")
-
-    @with_rw_directory
-    @skip(
-        """The referenced repository was removed, and one needs to set up a new
-        password controlled repo under the org's control."""
-    )
-    def test_leaking_password_in_clone_logs(self, rw_dir):
-        password = "fakepassword1234"
-        try:
-            Repo.clone_from(
-                url="https://fakeuser:{}@fakerepo.example.com/testrepo".format(password),
-                to_path=rw_dir,
-            )
-        except GitCommandError as err:
-            assert password not in str(err), "The error message '%s' should not contain the password" % err
-        # Working example from a blank private project.
-        Repo.clone_from(
-            url="https://gitlab+deploy-token-392045:mLWhVus7bjLsy8xj8q2V@gitlab.com/mercierm/test_git_python",
-            to_path=rw_dir,
-        )
-
-    @with_rw_repo("HEAD")
-    def test_clone_unsafe_options(self, rw_repo):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            tmp_file = tmp_dir / "pwn"
-            unsafe_options = [
-                f"--upload-pack='touch {tmp_file}'",
-                f"-u 'touch {tmp_file}'",
-                "--config=protocol.ext.allow=always",
-                "-c protocol.ext.allow=always",
-            ]
-            for unsafe_option in unsafe_options:
-                with self.assertRaises(UnsafeOptionError):
-                    rw_repo.clone(tmp_dir, multi_options=[unsafe_option])
-                assert not tmp_file.exists()
-
-            unsafe_options = [
-                {"upload-pack": f"touch {tmp_file}"},
-                {"u": f"touch {tmp_file}"},
-                {"config": "protocol.ext.allow=always"},
-                {"c": "protocol.ext.allow=always"},
-            ]
-            for unsafe_option in unsafe_options:
-                with self.assertRaises(UnsafeOptionError):
-                    rw_repo.clone(tmp_dir, **unsafe_option)
-                assert not tmp_file.exists()
-
-    @pytest.mark.xfail(
-        os.name == "nt",
-        reason=(
-            "File not created. A separate Windows command may be needed. This and the "
-            "currently passing test test_clone_unsafe_options must be adjusted in the "
-            "same way. Until then, test_clone_unsafe_options is unreliable on Windows."
-        ),
-        raises=AssertionError,
-    )
-    @with_rw_repo("HEAD")
-    def test_clone_unsafe_options_allowed(self, rw_repo):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            tmp_file = tmp_dir / "pwn"
-            unsafe_options = [
-                f"--upload-pack='touch {tmp_file}'",
-                f"-u 'touch {tmp_file}'",
-            ]
-            for i, unsafe_option in enumerate(unsafe_options):
-                destination = tmp_dir / str(i)
-                assert not tmp_file.exists()
-                # The options will be allowed, but the command will fail.
-                with self.assertRaises(GitCommandError):
-                    rw_repo.clone(destination, multi_options=[unsafe_option], allow_unsafe_options=True)
-                assert tmp_file.exists()
-                tmp_file.unlink()
-
-            unsafe_options = [
-                "--config=protocol.ext.allow=always",
-                "-c protocol.ext.allow=always",
-            ]
-            for i, unsafe_option in enumerate(unsafe_options):
-                destination = tmp_dir / str(i)
-                assert not destination.exists()
-                rw_repo.clone(destination, multi_options=[unsafe_option], allow_unsafe_options=True)
-                assert destination.exists()
-
-    @with_rw_repo("HEAD")
-    def test_clone_safe_options(self, rw_repo):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            options = [
-                "--depth=1",
-                "--single-branch",
-                "-q",
-            ]
-            for option in options:
-                destination = tmp_dir / option
-                assert not destination.exists()
-                rw_repo.clone(destination, multi_options=[option])
-                assert destination.exists()
-
-    @with_rw_repo("HEAD")
-    def test_clone_from_unsafe_options(self, rw_repo):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            tmp_file = tmp_dir / "pwn"
-            unsafe_options = [
-                f"--upload-pack='touch {tmp_file}'",
-                f"-u 'touch {tmp_file}'",
-                "--config=protocol.ext.allow=always",
-                "-c protocol.ext.allow=always",
-            ]
-            for unsafe_option in unsafe_options:
-                with self.assertRaises(UnsafeOptionError):
-                    Repo.clone_from(rw_repo.working_dir, tmp_dir, multi_options=[unsafe_option])
-                assert not tmp_file.exists()
-
-            unsafe_options = [
-                {"upload-pack": f"touch {tmp_file}"},
-                {"u": f"touch {tmp_file}"},
-                {"config": "protocol.ext.allow=always"},
-                {"c": "protocol.ext.allow=always"},
-            ]
-            for unsafe_option in unsafe_options:
-                with self.assertRaises(UnsafeOptionError):
-                    Repo.clone_from(rw_repo.working_dir, tmp_dir, **unsafe_option)
-                assert not tmp_file.exists()
-
-    @pytest.mark.xfail(
-        os.name == "nt",
-        reason=(
-            "File not created. A separate Windows command may be needed. This and the "
-            "currently passing test test_clone_from_unsafe_options must be adjusted in the "
-            "same way. Until then, test_clone_from_unsafe_options is unreliable on Windows."
-        ),
-        raises=AssertionError,
-    )
-    @with_rw_repo("HEAD")
-    def test_clone_from_unsafe_options_allowed(self, rw_repo):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            tmp_file = tmp_dir / "pwn"
-            unsafe_options = [
-                f"--upload-pack='touch {tmp_file}'",
-                f"-u 'touch {tmp_file}'",
-            ]
-            for i, unsafe_option in enumerate(unsafe_options):
-                destination = tmp_dir / str(i)
-                assert not tmp_file.exists()
-                # The options will be allowed, but the command will fail.
-                with self.assertRaises(GitCommandError):
-                    Repo.clone_from(
-                        rw_repo.working_dir, destination, multi_options=[unsafe_option], allow_unsafe_options=True
-                    )
-                assert tmp_file.exists()
-                tmp_file.unlink()
-
-            unsafe_options = [
-                "--config=protocol.ext.allow=always",
-                "-c protocol.ext.allow=always",
-            ]
-            for i, unsafe_option in enumerate(unsafe_options):
-                destination = tmp_dir / str(i)
-                assert not destination.exists()
-                Repo.clone_from(
-                    rw_repo.working_dir, destination, multi_options=[unsafe_option], allow_unsafe_options=True
-                )
-                assert destination.exists()
-
-    @with_rw_repo("HEAD")
-    def test_clone_from_safe_options(self, rw_repo):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            options = [
-                "--depth=1",
-                "--single-branch",
-                "-q",
-            ]
-            for option in options:
-                destination = tmp_dir / option
-                assert not destination.exists()
-                Repo.clone_from(rw_repo.common_dir, destination, multi_options=[option])
-                assert destination.exists()
-
-    def test_clone_from_unsafe_protocol(self):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            tmp_file = tmp_dir / "pwn"
-            urls = [
-                f"ext::sh -c touch% {tmp_file}",
-                "fd::17/foo",
-            ]
-            for url in urls:
-                with self.assertRaises(UnsafeProtocolError):
-                    Repo.clone_from(url, tmp_dir / "repo")
-                assert not tmp_file.exists()
-
-    def test_clone_from_unsafe_protocol_allowed(self):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            tmp_file = tmp_dir / "pwn"
-            urls = [
-                f"ext::sh -c touch% {tmp_file}",
-                "fd::/foo",
-            ]
-            for url in urls:
-                # The URL will be allowed into the command, but the command will
-                # fail since we don't have that protocol enabled in the Git config file.
-                with self.assertRaises(GitCommandError):
-                    Repo.clone_from(url, tmp_dir / "repo", allow_unsafe_protocols=True)
-                assert not tmp_file.exists()
-
-    def test_clone_from_unsafe_protocol_allowed_and_enabled(self):
-        with tempfile.TemporaryDirectory() as tdir:
-            tmp_dir = pathlib.Path(tdir)
-            tmp_file = tmp_dir / "pwn"
-            urls = [
-                f"ext::sh -c touch% {tmp_file}",
-            ]
-            allow_ext = [
-                "--config=protocol.ext.allow=always",
-            ]
-            for url in urls:
-                # The URL will be allowed into the command, and the protocol is enabled,
-                # but the command will fail since it can't read from the remote repo.
-                assert not tmp_file.exists()
-                with self.assertRaises(GitCommandError):
-                    Repo.clone_from(
-                        url,
-                        tmp_dir / "repo",
-                        multi_options=allow_ext,
-                        allow_unsafe_protocols=True,
-                        allow_unsafe_options=True,
-                    )
-                assert tmp_file.exists()
-                tmp_file.unlink()
-
     @with_rw_repo("HEAD")
     def test_max_chunk_size(self, repo):
         class TestOutputStream(TestBase):
@@ -543,8 +267,8 @@ class TestRepo(TestBase):
                 try:
                     rmtree(clone_path)
                 except OSError:
-                    # When relative paths are used, the clone may actually be inside
-                    # of the parent directory.
+                    # When relative paths are used, the clone may actually be inside of
+                    # the parent directory.
                     pass
                 # END exception handling
 
@@ -556,8 +280,8 @@ class TestRepo(TestBase):
                 try:
                     rmtree(clone_path)
                 except OSError:
-                    # When relative paths are used, the clone may actually be inside
-                    # of the parent directory.
+                    # When relative paths are used, the clone may actually be inside of
+                    # the parent directory.
                     pass
                 # END exception handling
 
@@ -645,6 +369,15 @@ class TestRepo(TestBase):
             f.write("junk")
         assert rwrepo.is_dirty(path="doc") is False
         assert rwrepo.is_dirty(untracked_files=True, path="doc") is True
+
+    @with_rw_repo("HEAD")
+    def test_is_dirty_with_pathlib_and_pathlike(self, rwrepo):
+        with open(osp.join(rwrepo.working_dir, "git", "util.py"), "at") as f:
+            f.write("junk")
+        assert rwrepo.is_dirty(path=Path("git")) is True
+        assert rwrepo.is_dirty(path=PathLikeMock("git")) is True
+        assert rwrepo.is_dirty(path=Path("doc")) is False
+        assert rwrepo.is_dirty(path=PathLikeMock("doc")) is False
 
     def test_head(self):
         self.assertEqual(self.rorepo.head.reference.object, self.rorepo.active_branch.object)
@@ -832,8 +565,8 @@ class TestRepo(TestBase):
             assert self.rorepo._get_config_path(config_level)
 
     def test_creation_deletion(self):
-        # Just a very quick test to assure it generally works. There are
-        # specialized cases in the test_refs module.
+        # Just a very quick test to assure it generally works. There are specialized
+        # cases in the test_refs module.
         head = self.rorepo.create_head("new_head", "HEAD~1")
         self.rorepo.delete_head(head)
 
@@ -1027,7 +760,8 @@ class TestRepo(TestBase):
                     num_resolved += 1
                 except (BadName, BadObject):
                     print("failed on %s" % path_section)
-                    # This is fine if we have something like 112, which belongs to remotes/rname/merge-requests/112.
+                    # This is fine if we have something like 112, which belongs to
+                    # remotes/rname/merge-requests/112.
                 # END exception handling
             # END for each token
             if ref_no == 3 - 1:
@@ -1066,9 +800,9 @@ class TestRepo(TestBase):
         # TODO: Dereference tag into a blob 0.1.7^{blob} - quite a special one.
         # Needs a tag which points to a blob.
 
-        # ref^0 returns commit being pointed to, same with ref~0, and ^{}
+        # ref^0 returns commit being pointed to, same with ref~0, ^{}, and ^{commit}
         tag = rev_parse("0.1.4")
-        for token in ("~0", "^0", "^{}"):
+        for token in ("~0", "^0", "^{}", "^{commit}"):
             self.assertEqual(tag.object, rev_parse("0.1.4%s" % token))
         # END handle multiple tokens
 
@@ -1149,7 +883,7 @@ class TestRepo(TestBase):
         )
         self.assertIsInstance(sm, Submodule)
 
-        # NOTE: the rest of this functionality is tested in test_submodule.
+        # NOTE: The rest of this functionality is tested in test_submodule.
 
     @with_rw_repo("HEAD")
     def test_git_file(self, rwrepo):
@@ -1178,8 +912,9 @@ class TestRepo(TestBase):
         # This is based on this comment:
         # https://github.com/gitpython-developers/GitPython/issues/60#issuecomment-23558741
         # And we expect to set max handles to a low value, like 64.
-        # You should set ulimit -n X, see .travis.yml
-        # The loops below would easily create 500 handles if these would leak (4 pipes + multiple mapped files).
+        # You should set ulimit -n X. See .travis.yml.
+        # The loops below would easily create 500 handles if these would leak
+        # (4 pipes + multiple mapped files).
         for _ in range(64):
             for repo_type in (GitCmdObjectDB, GitDB):
                 repo = Repo(self.rorepo.working_tree_dir, odbt=repo_type)
@@ -1200,8 +935,8 @@ class TestRepo(TestBase):
         self.assertEqual(r.active_branch.name, "master")
         assert not r.active_branch.is_valid(), "Branch is yet to be born"
 
-        # Actually, when trying to create a new branch without a commit, git itself fails.
-        # We should, however, not fail ungracefully.
+        # Actually, when trying to create a new branch without a commit, git itself
+        # fails. We should, however, not fail ungracefully.
         self.assertRaises(BadName, r.create_head, "foo")
         self.assertRaises(BadName, r.create_head, "master")
         # It's expected to not be able to access a tree
@@ -1315,13 +1050,13 @@ class TestRepo(TestBase):
         repo = Repo(worktree_path)
         self.assertIsInstance(repo, Repo)
 
-        # This ensures we're able to actually read the refs in the tree, which
-        # means we can read commondir correctly.
+        # This ensures we're able to actually read the refs in the tree, which means we
+        # can read commondir correctly.
         commit = repo.head.commit
         self.assertIsInstance(commit, Object)
 
-        # This ensures we can read the remotes, which confirms we're reading
-        # the config correctly.
+        # This ensures we can read the remotes, which confirms we're reading the config
+        # correctly.
         origin = repo.remotes.origin
         self.assertIsInstance(origin, Remote)
 
@@ -1387,7 +1122,7 @@ class TestRepo(TestBase):
         self.assertEqual(r.git.show("HEAD:hello.txt", strip_newline_in_stdout=False), "hello\n")
 
     @pytest.mark.xfail(
-        os.name == "nt",
+        sys.platform == "win32",
         reason=R"fatal: could not create leading directories of '--upload-pack=touch C:\Users\ek\AppData\Local\Temp\tmpnantqizc\pwn': Invalid argument",  # noqa: E501
         raises=GitCommandError,
     )

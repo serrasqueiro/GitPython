@@ -1,17 +1,18 @@
 # This module is part of GitPython and is released under the
 # 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
 
-"""Support library for tests."""
+"""Support library for performance tests."""
 
 import logging
 import os
+import os.path as osp
 import tempfile
 
 from git import Repo
 from git.db import GitCmdObjectDB, GitDB
-from test.lib import TestBase
 from git.util import rmtree
-import os.path as osp
+
+from test.lib import TestBase
 
 # { Invariants
 

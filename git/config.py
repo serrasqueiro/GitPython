@@ -5,6 +5,8 @@
 
 """Parser for reading and writing configuration files."""
 
+__all__ = ["GitConfigParser", "SectionConstraint"]
+
 import abc
 import configparser as cp
 import fnmatch
@@ -40,8 +42,9 @@ from typing import (
 from git.types import Lit_config_levels, ConfigLevels_Tup, PathLike, assert_never, _T
 
 if TYPE_CHECKING:
-    from git.repo.base import Repo
     from io import BytesIO
+
+    from git.repo.base import Repo
 
 T_ConfigParser = TypeVar("T_ConfigParser", bound="GitConfigParser")
 T_OMD_value = TypeVar("T_OMD_value", str, bytes, int, float, bool)
@@ -58,42 +61,41 @@ else:
 
 # -------------------------------------------------------------
 
-__all__ = ("GitConfigParser", "SectionConstraint")
+_logger = logging.getLogger(__name__)
 
-
-log = logging.getLogger("git.config")
-log.addHandler(logging.NullHandler())
-
-
-# The configuration level of a configuration file.
 CONFIG_LEVELS: ConfigLevels_Tup = ("system", "user", "global", "repository")
+"""The configuration level of a configuration file."""
 
-# Section pattern to detect conditional includes.
-# https://git-scm.com/docs/git-config#_conditional_includes
-CONDITIONAL_INCLUDE_REGEXP = re.compile(r"(?<=includeIf )\"(gitdir|gitdir/i|onbranch):(.+)\"")
+CONDITIONAL_INCLUDE_REGEXP = re.compile(r"(?<=includeIf )\"(gitdir|gitdir/i|onbranch|hasconfig:remote\.\*\.url):(.+)\"")
+"""Section pattern to detect conditional includes.
+
+See: https://git-scm.com/docs/git-config#_conditional_includes
+"""
 
 
 class MetaParserBuilder(abc.ABCMeta):  # noqa: B024
-    """Utility class wrapping base-class methods into decorators that assure read-only properties."""
+    """Utility class wrapping base-class methods into decorators that assure read-only
+    properties."""
 
     def __new__(cls, name: str, bases: Tuple, clsdict: Dict[str, Any]) -> "MetaParserBuilder":
         """Equip all base-class methods with a needs_values decorator, and all non-const
-        methods with a set_dirty_and_flush_changes decorator in addition to that.
+        methods with a :func:`set_dirty_and_flush_changes` decorator in addition to
+        that.
         """
         kmm = "_mutating_methods_"
         if kmm in clsdict:
             mutating_methods = clsdict[kmm]
             for base in bases:
                 methods = (t for t in inspect.getmembers(base, inspect.isroutine) if not t[0].startswith("_"))
-                for name, method in methods:
-                    if name in clsdict:
+                for method_name, method in methods:
+                    if method_name in clsdict:
                         continue
                     method_with_values = needs_values(method)
-                    if name in mutating_methods:
+                    if method_name in mutating_methods:
                         method_with_values = set_dirty_and_flush_changes(method_with_values)
                     # END mutating methods handling
 
-                    clsdict[name] = method_with_values
+                    clsdict[method_name] = method_with_values
                 # END for each name/method pair
             # END for each base
         # END if mutating methods configuration is set
@@ -103,7 +105,8 @@ class MetaParserBuilder(abc.ABCMeta):  # noqa: B024
 
 
 def needs_values(func: Callable[..., _T]) -> Callable[..., _T]:
-    """Return a method for ensuring we read values (on demand) before we try to access them."""
+    """Return a method for ensuring we read values (on demand) before we try to access
+    them."""
 
     @wraps(func)
     def assure_data_present(self: "GitConfigParser", *args: Any, **kwargs: Any) -> _T:
@@ -117,7 +120,8 @@ def needs_values(func: Callable[..., _T]) -> Callable[..., _T]:
 def set_dirty_and_flush_changes(non_const_func: Callable[..., _T]) -> Callable[..., _T]:
     """Return a method that checks whether given non constant function may be called.
 
-    If so, the instance will be set dirty. Additionally, we flush the changes right to disk.
+    If so, the instance will be set dirty. Additionally, we flush the changes right to
+    disk.
     """
 
     def flush_changes(self: "GitConfigParser", *args: Any, **kwargs: Any) -> _T:
@@ -137,7 +141,8 @@ class SectionConstraint(Generic[T_ConfigParser]):
 
     It supports all ConfigParser methods that operate on an option.
 
-    :note: If used as a context manager, will release the wrapped ConfigParser.
+    :note:
+        If used as a context manager, will release the wrapped ConfigParser.
     """
 
     __slots__ = ("_config", "_section_name")
@@ -172,8 +177,8 @@ class SectionConstraint(Generic[T_ConfigParser]):
         return super().__getattribute__(attr)
 
     def _call_config(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        """Call the configuration at the given method which must take a section name
-        as first argument."""
+        """Call the configuration at the given method which must take a section name as
+        first argument."""
         return getattr(self._config, method)(self._section_name, *args, **kwargs)
 
     @property
@@ -182,8 +187,8 @@ class SectionConstraint(Generic[T_ConfigParser]):
         return self._config
 
     def release(self) -> None:
-        """Equivalent to GitConfigParser.release(), which is called on our underlying
-        parser instance."""
+        """Equivalent to :meth:`GitConfigParser.release`, which is called on our
+        underlying parser instance."""
         return self._config.release()
 
     def __enter__(self) -> "SectionConstraint[T_ConfigParser]":
@@ -242,7 +247,7 @@ class _OMD(OrderedDict_OMD):
 def get_config_path(config_level: Lit_config_levels) -> str:
     # We do not support an absolute path of the gitconfig on Windows.
     # Use the global config instead.
-    if os.name == "nt" and config_level == "system":
+    if sys.platform == "win32" and config_level == "system":
         config_level = "global"
 
     if config_level == "system":
@@ -255,7 +260,8 @@ def get_config_path(config_level: Lit_config_levels) -> str:
     elif config_level == "repository":
         raise ValueError("No repo to get repository configuration from. Use Repo._get_config_path")
     else:
-        # Should not reach here. Will raise ValueError if does. Static typing will warn missing elifs
+        # Should not reach here. Will raise ValueError if does. Static typing will warn
+        # about missing elifs.
         assert_never(  # type: ignore[unreachable]
             config_level,
             ValueError(f"Invalid configuration level: {config_level!r}"),
@@ -265,14 +271,15 @@ def get_config_path(config_level: Lit_config_levels) -> str:
 class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
     """Implements specifics required to read git style configuration files.
 
-    This variation behaves much like the git.config command such that the configuration
-    will be read on demand based on the filepath given during initialization.
+    This variation behaves much like the :manpage:`git-config(1)` command, such that the
+    configuration will be read on demand based on the filepath given during
+    initialization.
 
     The changes will automatically be written once the instance goes out of scope, but
     can be triggered manually as well.
 
-    The configuration file will be locked if you intend to change values preventing other
-    instances to write concurrently.
+    The configuration file will be locked if you intend to change values preventing
+    other instances to write concurrently.
 
     :note:
         The config is case-sensitive even when queried, hence section and option names
@@ -283,12 +290,14 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
     """
 
     # { Configuration
-    # The lock type determines the type of lock to use in new configuration readers.
-    # They must be compatible to the LockFile interface.
-    # A suitable alternative would be the BlockingLockFile
     t_lock = LockFile
-    re_comment = re.compile(r"^\s*[#;]")
+    """The lock type determines the type of lock to use in new configuration readers.
 
+    They must be compatible to the :class:`~git.util.LockFile` interface.
+    A suitable alternative would be the :class:`~git.util.BlockingLockFile`.
+    """
+
+    re_comment = re.compile(r"^\s*[#;]")
     # } END configuration
 
     optvalueonly_source = r"\s*(?P<option>[^:=\s][^:=]*)"
@@ -299,8 +308,9 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
 
     del optvalueonly_source
 
-    # list of RawConfigParser methods able to change the instance
     _mutating_methods_ = ("add_section", "remove_section", "remove_option", "set")
+    """Names of :class:`~configparser.RawConfigParser` methods able to change the
+    instance."""
 
     def __init__(
         self,
@@ -310,21 +320,22 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         config_level: Union[Lit_config_levels, None] = None,
         repo: Union["Repo", None] = None,
     ) -> None:
-        """Initialize a configuration reader to read the given file_or_files and to
-        possibly allow changes to it by setting read_only False.
+        """Initialize a configuration reader to read the given `file_or_files` and to
+        possibly allow changes to it by setting `read_only` False.
 
         :param file_or_files:
             A file path or file object, or a sequence of possibly more than one of them.
 
         :param read_only:
-            If True, the ConfigParser may only read the data, but not change it.
-            If False, only a single file path or file object may be given. We will write
-            back the changes when they happen, or when the ConfigParser is released.
-            This will not happen if other configuration files have been included.
+            If ``True``, the ConfigParser may only read the data, but not change it.
+            If ``False``, only a single file path or file object may be given. We will
+            write back the changes when they happen, or when the ConfigParser is
+            released. This will not happen if other configuration files have been
+            included.
 
         :param merge_includes:
-            If True, we will read files mentioned in ``[include]`` sections and merge
-            their contents into ours. This makes it impossible to write back an
+            If ``True``, we will read files mentioned in ``[include]`` sections and
+            merge their contents into ours. This makes it impossible to write back an
             individual configuration file. Thus, if you want to modify a single
             configuration file, turn this off to leave the original dataset unaltered
             when reading it.
@@ -334,11 +345,12 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
             configuration files.
         """
         cp.RawConfigParser.__init__(self, dict_type=_OMD)
-        self._dict: Callable[..., _OMD]  # type: ignore   # mypy/typeshed bug?
+        self._dict: Callable[..., _OMD]
         self._defaults: _OMD
-        self._sections: _OMD  # type: ignore  # mypy/typeshed bug?
+        self._sections: _OMD
 
-        # Used in Python 3. Needs to stay in sync with sections for underlying implementation to work.
+        # Used in Python 3. Needs to stay in sync with sections for underlying
+        # implementation to work.
         if not hasattr(self, "_proxies"):
             self._proxies = self._dict()
 
@@ -384,7 +396,7 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         # END read-only check
 
     def __del__(self) -> None:
-        """Write pending changes if required and release locks"""
+        """Write pending changes if required and release locks."""
         # NOTE: Only consistent in Python 2.
         self.release()
 
@@ -396,10 +408,12 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         self.release()
 
     def release(self) -> None:
-        """Flush changes and release the configuration write lock. This instance must not be used anymore afterwards.
+        """Flush changes and release the configuration write lock. This instance must
+        not be used anymore afterwards.
 
-        In Python 3, it's required to explicitly release locks and flush changes, as __del__ is not called
-        deterministically anymore."""
+        In Python 3, it's required to explicitly release locks and flush changes, as
+        ``__del__`` is not called deterministically anymore.
+        """
         # Checking for the lock here makes sure we do not raise during write()
         # in case an invalid parser was created who could not get a lock.
         if self.read_only or (self._lock and not self._lock._has_lock()):
@@ -408,7 +422,7 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         try:
             self.write()
         except IOError:
-            log.error("Exception during destruction of GitConfigParser", exc_info=True)
+            _logger.error("Exception during destruction of GitConfigParser", exc_info=True)
         except ReferenceError:
             # This happens in Python 3... and usually means that some state cannot be
             # written as the sections dict cannot be iterated. This usually happens when
@@ -423,8 +437,9 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         return optionstr
 
     def _read(self, fp: Union[BufferedReader, IO[bytes]], fpname: str) -> None:
-        """Originally a direct copy of the Python 2.4 version of RawConfigParser._read,
-        to ensure it uses ordered dicts.
+        """Originally a direct copy of the Python 2.4 version of
+        :meth:`RawConfigParser._read <configparser.RawConfigParser._read>`, to ensure it
+        uses ordered dicts.
 
         The ordering bug was fixed in Python 2.4, and dict itself keeps ordering since
         Python 3.7. This has some other changes, especially that it ignores initial
@@ -437,7 +452,7 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         e = None  # None, or an exception.
 
         def string_decode(v: str) -> str:
-            if v[-1] == "\\":
+            if v and v.endswith("\\"):
                 v = v[:-1]
             # END cut trailing escapes to prevent decode error
 
@@ -481,19 +496,26 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
                 if mo:
                     # We might just have handled the last line, which could contain a quotation we want to remove.
                     optname, vi, optval = mo.group("option", "vi", "value")
+                    optname = self.optionxform(optname.rstrip())
+
                     if vi in ("=", ":") and ";" in optval and not optval.strip().startswith('"'):
                         pos = optval.find(";")
                         if pos != -1 and optval[pos - 1].isspace():
                             optval = optval[:pos]
                     optval = optval.strip()
-                    if optval == '""':
-                        optval = ""
-                    # END handle empty string
-                    optname = self.optionxform(optname.rstrip())
-                    if len(optval) > 1 and optval[0] == '"' and optval[-1] != '"':
+
+                    if len(optval) < 2 or optval[0] != '"':
+                        # Does not open quoting.
+                        pass
+                    elif optval[-1] != '"':
+                        # Opens quoting and does not close: appears to start multi-line quoting.
                         is_multi_line = True
                         optval = string_decode(optval[1:])
-                    # END handle multi-line
+                    elif optval.find("\\", 1, -1) == -1 and optval.find('"', 1, -1) == -1:
+                        # Opens and closes quoting. Single line, and all we need is quote removal.
+                        optval = optval[1:-1]
+                    # TODO: Handle other quoted content, especially well-formed backslash escapes.
+
                     # Preserves multiple values for duplicate optnames.
                     cursect.add(optname, optval)
                 else:
@@ -524,7 +546,8 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
     def _included_paths(self) -> List[Tuple[str, str]]:
         """List all paths that must be included to configuration.
 
-        :return: The list of paths, where each path is a tuple of ``(option, value)``.
+        :return:
+            The list of paths, where each path is a tuple of (option, value).
         """
         paths = []
 
@@ -551,11 +574,11 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
                 if keyword.endswith("/i"):
                     value = re.sub(
                         r"[a-zA-Z]",
-                        lambda m: "[{}{}]".format(m.group().lower(), m.group().upper()),
+                        lambda m: f"[{m.group().lower()!r}{m.group().upper()!r}]",
                         value,
                     )
                 if self._repo.git_dir:
-                    if fnmatch.fnmatchcase(str(self._repo.git_dir), value):
+                    if fnmatch.fnmatchcase(os.fspath(self._repo.git_dir), value):
                         paths += self.items(section)
 
             elif keyword == "onbranch":
@@ -567,7 +590,11 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
 
                 if fnmatch.fnmatchcase(branch_name, value):
                     paths += self.items(section)
-
+            elif keyword == "hasconfig:remote.*.url":
+                for remote in self._repo.remotes:
+                    if fnmatch.fnmatchcase(remote.url, value):
+                        paths += self.items(section)
+                        break
         return paths
 
     def read(self) -> None:  # type: ignore[override]
@@ -576,8 +603,8 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         This will ignore files that cannot be read, possibly leaving an empty
         configuration.
 
-        :return: Nothing
-        :raise IOError: If a file cannot be handled
+        :raise IOError:
+            If a file cannot be handled.
         """
         if self._is_initialized:
             return
@@ -590,7 +617,7 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         elif not isinstance(self._file_or_files, (tuple, list, Sequence)):
             # Could merge with above isinstance once runtime type known.
             files_to_read = [self._file_or_files]
-        else:  # for lists or tuples
+        else:  # For lists or tuples.
             files_to_read = list(self._file_or_files)
         # END ensure we have a copy of the paths to handle
 
@@ -602,11 +629,10 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
 
             if hasattr(file_path, "seek"):
                 # Must be a file-object.
-                file_path = cast(IO[bytes], file_path)  # TODO: Replace with assert to narrow type, once sure.
+                # TODO: Replace cast with assert to narrow type, once sure.
+                file_path = cast(IO[bytes], file_path)
                 self._read(file_path, file_path.name)
             else:
-                # Assume a path if it is not a file-object.
-                file_path = cast(PathLike, file_path)
                 try:
                     with open(file_path, "rb") as fp:
                         file_ok = True
@@ -614,8 +640,8 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
                 except IOError:
                     continue
 
-            # Read includes and append those that we didn't handle yet.
-            # We expect all paths to be normalized and absolute (and will ensure that is the case).
+            # Read includes and append those that we didn't handle yet. We expect all
+            # paths to be normalized and absolute (and will ensure that is the case).
             if self._has_includes():
                 for _, include_path in self._included_paths():
                     if include_path.startswith("~"):
@@ -694,8 +720,10 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
     def write(self) -> None:
         """Write changes to our file, if there are changes at all.
 
-        :raise IOError: If this is a read-only writer instance or if we could not obtain
-            a file lock"""
+        :raise IOError:
+            If this is a read-only writer instance or if we could not obtain a file
+            lock.
+        """
         self._assure_writable("write")
         if not self._dirty:
             return
@@ -708,7 +736,7 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         # END assert multiple files
 
         if self._has_includes():
-            log.debug(
+            _logger.debug(
                 "Skipping write-back of configuration file as include files were merged in."
                 + "Set merge_includes=False to prevent this."
             )
@@ -738,13 +766,13 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         if self.read_only:
             raise IOError("Cannot execute non-constant method %s.%s" % (self, method_name))
 
-    def add_section(self, section: str) -> None:
-        """Assures added options will stay in order"""
+    def add_section(self, section: "cp._SectionName") -> None:
+        """Assures added options will stay in order."""
         return super().add_section(section)
 
     @property
     def read_only(self) -> bool:
-        """:return: True if this instance may change the configuration file"""
+        """:return: ``True`` if this instance may change the configuration file"""
         return self._read_only
 
     # FIXME: Figure out if default or return type can really include bool.
@@ -756,16 +784,18 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
     ) -> Union[int, float, str, bool]:
         """Get an option's value.
 
-        If multiple values are specified for this option in the section, the
-        last one specified is returned.
+        If multiple values are specified for this option in the section, the last one
+        specified is returned.
 
         :param default:
-            If not None, the given default value will be returned in case
-            the option did not exist
+            If not ``None``, the given default value will be returned in case the option
+            did not exist.
 
-        :return: a properly typed value, either int, float or string
+        :return:
+            A properly typed value, either int, float or string
 
-        :raise TypeError: in case the value could not be understood
+        :raise TypeError:
+            In case the value could not be understood.
             Otherwise the exceptions known to the ConfigParser will be raised.
         """
         try:
@@ -789,12 +819,14 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         returned.
 
         :param default:
-            If not None, a list containing the given default value will be
-            returned in case the option did not exist
+            If not ``None``, a list containing the given default value will be returned
+            in case the option did not exist.
 
-        :return: a list of properly typed values, either int, float or string
+        :return:
+            A list of properly typed values, either int, float or string
 
-        :raise TypeError: in case the value could not be understood
+        :raise TypeError:
+            In case the value could not be understood.
             Otherwise the exceptions known to the ConfigParser will be raised.
         """
         try:
@@ -846,13 +878,19 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         """Set the given option in section to the given value.
 
         This will create the section if required, and will not throw as opposed to the
-        default ConfigParser 'set' method.
+        default ConfigParser ``set`` method.
 
-        :param section: Name of the section in which the option resides or should reside
-        :param option: Name of the options whose value to set
-        :param value: Value to set the option to. It must be a string or convertible to
-            a string.
-        :return: This instance
+        :param section:
+            Name of the section in which the option resides or should reside.
+
+        :param option:
+            Name of the options whose value to set.
+
+        :param value:
+            Value to set the option to. It must be a string or convertible to a string.
+
+        :return:
+            This instance
         """
         if not self.has_section(section):
             self.add_section(section)
@@ -864,15 +902,22 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
     def add_value(self, section: str, option: str, value: Union[str, bytes, int, float, bool]) -> "GitConfigParser":
         """Add a value for the given option in section.
 
-        This will create the section if required, and will not throw as opposed to the default
-        ConfigParser 'set' method. The value becomes the new value of the option as returned
-        by 'get_value', and appends to the list of values returned by 'get_values`'.
+        This will create the section if required, and will not throw as opposed to the
+        default ConfigParser ``set`` method. The value becomes the new value of the
+        option as returned by :meth:`get_value`, and appends to the list of values
+        returned by :meth:`get_values`.
 
-        :param section: Name of the section in which the option resides or should reside
-        :param option: Name of the option
-        :param value: Value to add to option. It must be a string or convertible
-            to a string
-        :return: This instance
+        :param section:
+            Name of the section in which the option resides or should reside.
+
+        :param option:
+            Name of the option.
+
+        :param value:
+            Value to add to option. It must be a string or convertible to a string.
+
+        :return:
+            This instance
         """
         if not self.has_section(section):
             self.add_section(section)
@@ -880,11 +925,16 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
         return self
 
     def rename_section(self, section: str, new_name: str) -> "GitConfigParser":
-        """Rename the given section to new_name.
+        """Rename the given section to `new_name`.
 
-        :raise ValueError: If ``section`` doesn't exist
-        :raise ValueError: If a section with ``new_name`` does already exist
-        :return: This instance
+        :raise ValueError:
+            If:
+
+            * `section` doesn't exist.
+            * A section with `new_name` does already exist.
+
+        :return:
+            This instance
         """
         if not self.has_section(section):
             raise ValueError("Source section '%s' doesn't exist" % section)
@@ -897,6 +947,7 @@ class GitConfigParser(cp.RawConfigParser, metaclass=MetaParserBuilder):
             new_section.setall(k, vs)
         # END for each value to copy
 
-        # This call writes back the changes, which is why we don't have the respective decorator.
+        # This call writes back the changes, which is why we don't have the respective
+        # decorator.
         self.remove_section(section)
         return self

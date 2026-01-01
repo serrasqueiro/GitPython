@@ -5,18 +5,18 @@
 
 import gc
 import os
+import os.path as osp
 import sys
 import tempfile
 from unittest import skipIf
 
 from git import Repo
-from git.objects import Blob, Tree, Commit, TagObject
-from git.objects.util import get_object_type_by_name
-from test.lib import TestBase as _TestBase, with_rw_repo, with_rw_and_rw_remote_repo
-from git.util import hex_to_bin, HIDE_WINDOWS_FREEZE_ERRORS
-
+from git.objects import Blob, Commit, TagObject, Tree
 import git.objects.base as base
-import os.path as osp
+from git.objects.util import get_object_type_by_name
+from git.util import HIDE_WINDOWS_FREEZE_ERRORS, hex_to_bin
+
+from test.lib import TestBase as _TestBase, with_rw_and_rw_remote_repo, with_rw_repo
 
 
 class TestBase(_TestBase):
@@ -72,7 +72,10 @@ class TestBase(_TestBase):
                 self.assertEqual(item, item.stream_data(tmpfile))
                 tmpfile.seek(0)
                 self.assertEqual(tmpfile.read(), data)
-            os.remove(tmpfile.name)  # Do it this way so we can inspect the file on failure.
+
+            # Remove the file this way, instead of with a context manager or "finally",
+            # so it is only removed on success, and we can inspect the file on failure.
+            os.remove(tmpfile.name)
         # END for each object type to create
 
         # Each has a unique sha.
@@ -127,13 +130,13 @@ class TestBase(_TestBase):
         with open(file_path, "wb") as fp:
             fp.write(b"something")
 
-        if os.name == "nt":
+        if sys.platform == "win32":
             # On Windows, there is no way this works, see images on:
             # https://github.com/gitpython-developers/GitPython/issues/147#issuecomment-68881897
             # Therefore, it must be added using the Python implementation.
             rw_repo.index.add([file_path])
-            # However, when the test winds down, rmtree fails to delete this file, which is recognized
-            # as ??? only.
+            # However, when the test winds down, rmtree fails to delete this file, which
+            # is recognized as ??? only.
         else:
             # On POSIX, we can just add Unicode files without problems.
             rw_repo.git.add(rw_repo.working_dir)

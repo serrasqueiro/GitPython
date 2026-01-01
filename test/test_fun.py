@@ -2,27 +2,26 @@
 # 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
 
 from io import BytesIO
-from stat import S_IFDIR, S_IFREG, S_IFLNK, S_IXUSR
+from stat import S_IFDIR, S_IFLNK, S_IFREG, S_IXUSR
 from os import stat
 import os.path as osp
 
+from gitdb.base import IStream
+from gitdb.typ import str_tree_type
+
 from git import Git
 from git.index import IndexFile
-from git.index.fun import (
-    aggressive_tree_merge,
-    stat_mode_to_index_mode,
-)
+from git.index.fun import aggressive_tree_merge, stat_mode_to_index_mode
 from git.objects.fun import (
     traverse_tree_recursive,
     traverse_trees_recursive,
-    tree_to_stream,
     tree_entries_from_data,
+    tree_to_stream,
 )
 from git.repo.fun import find_worktree_git_dir
-from test.lib import TestBase, with_rw_repo, with_rw_directory
 from git.util import bin_to_hex, cygpath, join_path_native
-from gitdb.base import IStream
-from gitdb.typ import str_tree_type
+
+from test.lib import TestBase, with_rw_directory, with_rw_repo
 
 
 class TestFun(TestBase):
@@ -35,7 +34,8 @@ class TestFun(TestBase):
         # END assert entry matches fully
 
     def test_aggressive_tree_merge(self):
-        # Head tree with additions, removals and modification compared to its predecessor.
+        # Head tree with additions, removals and modification compared to its
+        # predecessor.
         odb = self.rorepo.odb
         HC = self.rorepo.commit("6c1faef799095f3990e9970bc2cb10aa0221cf9c")
         H = HC.tree
@@ -243,6 +243,7 @@ class TestFun(TestBase):
         B_old = self.rorepo.tree("1f66cfbbce58b4b552b041707a12d437cc5f400a")  # old base tree
 
         # Two very different trees.
+
         entries = traverse_trees_recursive(odb, [B_old.binsha, H.binsha], "")
         self._assert_tree_entries(entries, 2)
 
@@ -251,7 +252,10 @@ class TestFun(TestBase):
         self._assert_tree_entries(oentries, 2)
 
         # Single tree.
-        is_no_tree = lambda i, d: i.type != "tree"
+
+        def is_no_tree(i, _d):
+            return i.type != "tree"
+
         entries = traverse_trees_recursive(odb, [B.binsha], "")
         assert len(entries) == len(list(B.traverse(predicate=is_no_tree)))
         self._assert_tree_entries(entries, 1)

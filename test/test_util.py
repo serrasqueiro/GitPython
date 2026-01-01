@@ -34,10 +34,12 @@ from git.util import (
     LockFile,
     cygpath,
     decygpath,
+    is_cygwin_git,
     get_user_id,
     remove_password_if_present,
     rmtree,
 )
+
 from test.lib import TestBase, with_rw_repo
 
 
@@ -46,12 +48,14 @@ def permission_error_tmpdir(tmp_path):
     """Fixture to test permissions errors in situations where they are not overcome."""
     td = tmp_path / "testdir"
     td.mkdir()
-    (td / "x").write_bytes(b"")
+    (td / "x").touch()
 
     # Set up PermissionError on Windows, where we can't delete read-only files.
     (td / "x").chmod(stat.S_IRUSR)
 
-    # Set up PermissionError on Unix, where we can't delete files in read-only directories.
+    # Set up PermissionError on Unix, where non-root users can't delete files in
+    # read-only directories. (Tests that rely on this and assert that rmtree raises
+    # PermissionError will fail if they are run as root.)
     td.chmod(stat.S_IRUSR | stat.S_IXUSR)
 
     yield td
@@ -73,7 +77,7 @@ class TestRmtree:
             td / "s" / "y",
             td / "s" / "z",
         ):
-            f.write_bytes(b"")
+            f.touch()
 
         try:
             rmtree(td)
@@ -95,7 +99,7 @@ class TestRmtree:
         for d in td, td / "sub":
             d.mkdir()
         for f in td / "x", td / "sub" / "y":
-            f.write_bytes(b"")
+            f.touch()
             f.chmod(0)
 
         try:
@@ -115,7 +119,7 @@ class TestRmtree:
 
         dir1 = tmp_path / "dir1"
         dir1.mkdir()
-        (dir1 / "file").write_bytes(b"")
+        (dir1 / "file").touch()
         (dir1 / "file").chmod(stat.S_IRUSR)
         old_mode = (dir1 / "file").stat().st_mode
 
@@ -147,11 +151,12 @@ class TestRmtree:
         mocker.patch.object(pathlib.Path, "chmod")
 
     @pytest.mark.skipif(
-        os.name != "nt",
+        sys.platform != "win32",
         reason="PermissionError is only ever wrapped on Windows",
     )
     def test_wraps_perm_error_if_enabled(self, mocker, permission_error_tmpdir):
-        """rmtree wraps PermissionError on Windows when HIDE_WINDOWS_KNOWN_ERRORS is true."""
+        """rmtree wraps PermissionError on Windows when HIDE_WINDOWS_KNOWN_ERRORS is
+        true."""
         self._patch_for_wrapping_test(mocker, True)
 
         with pytest.raises(SkipTest):
@@ -165,11 +170,12 @@ class TestRmtree:
         "hide_windows_known_errors",
         [
             pytest.param(False),
-            pytest.param(True, marks=pytest.mark.skipif(os.name == "nt", reason="We would wrap on Windows")),
+            pytest.param(True, marks=pytest.mark.skipif(sys.platform == "win32", reason="We would wrap on Windows")),
         ],
     )
     def test_does_not_wrap_perm_error_unless_enabled(self, mocker, permission_error_tmpdir, hide_windows_known_errors):
-        """rmtree does not wrap PermissionError on non-Windows systems or when HIDE_WINDOWS_KNOWN_ERRORS is false."""
+        """rmtree does not wrap PermissionError on non-Windows systems or when
+        HIDE_WINDOWS_KNOWN_ERRORS is false."""
         self._patch_for_wrapping_test(mocker, hide_windows_known_errors)
 
         with pytest.raises(PermissionError):
@@ -180,7 +186,9 @@ class TestRmtree:
 
     @pytest.mark.parametrize("hide_windows_known_errors", [False, True])
     def test_does_not_wrap_other_errors(self, tmp_path, mocker, hide_windows_known_errors):
-        file_not_found_tmpdir = tmp_path / "testdir"  # It is deliberately never created.
+        # The file is deliberately never created.
+        file_not_found_tmpdir = tmp_path / "testdir"
+
         self._patch_for_wrapping_test(mocker, hide_windows_known_errors)
 
         with pytest.raises(FileNotFoundError):
@@ -207,24 +215,28 @@ class TestEnvParsing:
         )
         return ast.literal_eval(output)
 
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="These environment variables are only used on Windows.",
+    )
     @pytest.mark.parametrize(
         "env_var_value, expected_truth_value",
         [
-            (None, os.name == "nt"),  # True on Windows when the environment variable is unset.
+            (None, True),  # When the environment variable is unset.
             ("", False),
             (" ", False),
             ("0", False),
-            ("1", os.name == "nt"),
+            ("1", True),
             ("false", False),
-            ("true", os.name == "nt"),
+            ("true", True),
             ("False", False),
-            ("True", os.name == "nt"),
+            ("True", True),
             ("no", False),
-            ("yes", os.name == "nt"),
+            ("yes", True),
             ("NO", False),
-            ("YES", os.name == "nt"),
+            ("YES", True),
             (" no  ", False),
-            (" yes  ", os.name == "nt"),
+            (" yes  ", True),
         ],
     )
     @pytest.mark.parametrize(
@@ -338,6 +350,24 @@ class TestCygpath:
         assert wcpath == wpath.replace("/", "\\"), cpath
 
 
+class TestIsCygwinGit:
+    """Tests for :func:`is_cygwin_git`"""
+
+    def test_on_path_executable(self):
+        # Currently we assume tests run on Cygwin use Cygwin git. See #533 and #1455 for background.
+        if sys.platform == "cygwin":
+            assert is_cygwin_git("git")
+        else:
+            assert not is_cygwin_git("git")
+
+    def test_none_executable(self):
+        assert not is_cygwin_git(None)
+
+    def test_with_missing_uname(self):
+        """Test for handling when `uname` isn't in the same directory as `git`"""
+        assert not is_cygwin_git("/bogus_path/git")
+
+
 class _Member:
     """A member of an IterableList."""
 
@@ -400,7 +430,7 @@ class TestUtils(TestBase):
             elapsed = time.time() - start
 
         extra_time = 0.02
-        if os.name == "nt" or sys.platform == "cygwin":
+        if sys.platform in {"win32", "cygwin"}:
             extra_time *= 6  # Without this, we get indeterministic failures on Windows.
         elif sys.platform == "darwin":
             extra_time *= 18  # The situation on macOS is similar, but with more delay.
@@ -496,7 +526,8 @@ class TestUtils(TestBase):
         committer = Actor.committer(None)
         author = Actor.author(None)
         # We can't test with `self.rorepo.config_reader()` here, as the UUID laziness
-        # depends on whether the user running the test has their global user.name config set.
+        # depends on whether the user running the test has their global user.name config
+        # set.
         self.assertEqual(committer.name, "user")
         self.assertTrue(committer.email.startswith("user@"))
         self.assertEqual(author.name, "user")

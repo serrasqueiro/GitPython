@@ -2,6 +2,51 @@
 Changelog
 =========
 
+3.1.46
+======
+
+See the following for all changes.
+https://github.com/gitpython-developers/GitPython/releases/tag/3.1.46
+
+3.1.45
+======
+
+See the following for all changes.
+https://github.com/gitpython-developers/GitPython/releases/tag/3.1.45
+
+3.1.44
+======
+
+See the following for all changes.
+https://github.com/gitpython-developers/GitPython/releases/tag/3.1.44
+
+3.1.43
+======
+
+A major visible change will be the added deprecation- or user-warnings,
+and greatly improved typing.
+
+See the following for all changes.
+https://github.com/gitpython-developers/GitPython/releases/tag/3.1.43
+
+3.1.42
+======
+
+See the following for all changes.
+https://github.com/gitpython-developers/GitPython/releases/tag/3.1.42
+
+3.1.41
+======
+
+This release is relevant for security as it fixes a possible arbitrary
+code execution on Windows.
+
+See this PR for details: https://github.com/gitpython-developers/GitPython/pull/1792
+An advisory is available soon at: https://github.com/gitpython-developers/GitPython/security/advisories/GHSA-2mqj-m65w-jghx
+
+See the following for all changes.
+https://github.com/gitpython-developers/GitPython/releases/tag/3.1.41
+
 3.1.40
 ======
 
@@ -72,7 +117,7 @@ https://github.com/gitpython-developers/gitpython/milestone/61?closed=1
   but a necessary fix for https://github.com/gitpython-developers/GitPython/issues/1515.
   Please take a look at the PR for more information and how to bypass these protections
   in case they cause breakage: https://github.com/gitpython-developers/GitPython/pull/1521.
-  
+
 
 See the following for all changes.
 https://github.com/gitpython-developers/gitpython/milestone/60?closed=1
@@ -137,38 +182,38 @@ https://github.com/gitpython-developers/gitpython/milestone/53?closed=1
 * General:
 
   - Remove python 3.6 support
-  
+
   - Remove distutils ahead of deprecation in standard library.
-  
+
   - Update sphinx to 4.1.12 and use autodoc-typehints.
-  
+
   - Include README as long_description on PyPI
-  
+
   - Test against earliest and latest minor version available on Github Actions (e.g. 3.9.0 and 3.9.7)
-  
+
 
 * Typing:
 
   - Add types to ALL functions.
-  
+
   - Ensure py.typed is collected.
-  
+
   - Increase mypy strictness with disallow_untyped_defs, warn_redundant_casts, warn_unreachable.
-  
+
   - Use typing.NamedTuple and typing.OrderedDict now 3.6 dropped.
-  
+
   - Make Protocol classes ABCs at runtime due to new behaviour/bug in 3.9.7 & 3.10.0-rc1
-  
+
   - Remove use of typing.TypeGuard until later release, to allow dependent libs time to update.
-  
+
   - Tracking issue: https://github.com/gitpython-developers/GitPython/issues/1095
 
 * Runtime improvements:
 
   - Add clone_multi_options support to submodule.add()
-  
+
   - Delay calling get_user_id() unless essential, to support sand-boxed environments.
-  
+
   - Add timeout to handle_process_output(), in case thread.join() hangs.
 
 See the following for details:

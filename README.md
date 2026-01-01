@@ -17,6 +17,8 @@ probably the skills to scratch that itch of mine: implement `git` in a way that 
 If you like the idea and want to learn more, please head over to [gitoxide](https://github.com/Byron/gitoxide), an
 implementation of 'git' in [Rust](https://www.rust-lang.org).
 
+*(Please note that `gitoxide` is not currently available for use in Python, and that Rust is required.)*
+
 ## GitPython
 
 GitPython is a python library used to interact with git repositories, high-level like git-porcelain,
@@ -37,9 +39,9 @@ The project is open to contributions of all kinds, as well as new maintainers.
 
 ### REQUIREMENTS
 
-GitPython needs the `git` executable to be installed on the system and available in your `PATH` for most operations.
-If it is not in your `PATH`, you can help GitPython find it by setting
-the `GIT_PYTHON_GIT_EXECUTABLE=<path/to/git>` environment variable.
+GitPython needs the `git` executable to be installed on the system and available in your
+`PATH` for most operations. If it is not in your `PATH`, you can help GitPython find it
+by setting the `GIT_PYTHON_GIT_EXECUTABLE=<path/to/git>` environment variable.
 
 - Git (1.7.x or newer)
 - Python >= 3.7
@@ -55,7 +57,7 @@ GitPython and its required package dependencies can be installed in any of the f
 
 To obtain and install a copy [from PyPI](https://pypi.org/project/GitPython/), run:
 
-```bash
+```sh
 pip install GitPython
 ```
 
@@ -65,7 +67,7 @@ pip install GitPython
 
 If you have downloaded the source code, run this from inside the unpacked `GitPython` directory:
 
-```bash
+```sh
 pip install .
 ```
 
@@ -73,7 +75,7 @@ pip install .
 
 To clone the [the GitHub repository](https://github.com/gitpython-developers/GitPython) from source to work on the code, you can do it like so:
 
-```bash
+```sh
 git clone https://github.com/gitpython-developers/GitPython
 cd GitPython
 ./init-tests-after-clone.sh
@@ -83,7 +85,7 @@ On Windows, `./init-tests-after-clone.sh` can be run in a Git Bash shell.
 
 If you are cloning [your own fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/about-forks), then replace the above `git clone` command with one that gives the URL of your fork. Or use this [`gh`](https://cli.github.com/) command (assuming you have `gh` and your fork is called `GitPython`):
 
-```bash
+```sh
 gh repo clone GitPython
 ```
 
@@ -91,7 +93,7 @@ Having cloned the repo, create and activate your [virtual environment](https://d
 
 Then make an [editable install](https://pip.pypa.io/en/stable/topics/local-project-installs/#editable-installs):
 
-```bash
+```sh
 pip install -e ".[test]"
 ```
 
@@ -99,11 +101,11 @@ In the less common case that you do not want to install test dependencies, `pip 
 
 #### With editable *dependencies* (not preferred, and rarely needed)
 
-In rare cases, you may want to work on GitPython and one or both of its [gitdb](https://github.com/gitpython-developers/gitdb) and [smmap](https://github.com/gitpython-developers/smmap) dependencies at the same time, with changes in your local working copy of gitdb or smmap immediatley reflected in the behavior of your local working copy of GitPython. This can be done by making editable installations of those dependencies in the same virtual environment where you install GitPython.
+In rare cases, you may want to work on GitPython and one or both of its [gitdb](https://github.com/gitpython-developers/gitdb) and [smmap](https://github.com/gitpython-developers/smmap) dependencies at the same time, with changes in your local working copy of gitdb or smmap immediately reflected in the behavior of your local working copy of GitPython. This can be done by making editable installations of those dependencies in the same virtual environment where you install GitPython.
 
 If you want to do that *and* you want the versions in GitPython's git submodules to be used, then pass `-e git/ext/gitdb` and/or `-e git/ext/gitdb/gitdb/ext/smmap` to `pip install`. This can be done in any order, and in separate `pip install` commands or the same one, so long as `-e` appears before *each* path. For example, you can install GitPython, gitdb, and smmap editably in the currently active virtual environment this way:
 
-```bash
+```sh
 pip install -e ".[test]" -e git/ext/gitdb -e git/ext/gitdb/gitdb/ext/smmap
 ```
 
@@ -139,42 +141,38 @@ you will encounter test failures.
 
 Ensure testing libraries are installed. This is taken care of already if you installed with:
 
-```bash
+```sh
 pip install -e ".[test]"
 ```
 
-Otherwise, you can run:
-
-```bash
-pip install -r test-requirements.txt
-```
+If you had installed with a command like `pip install -e .` instead, you can still run
+the above command to add the testing dependencies.
 
 #### Test commands
 
 To test, run:
 
-```bash
+```sh
 pytest
 ```
 
-To lint, and apply automatic code formatting, run:
+To lint, and apply some linting fixes as well as automatic code formatting, run:
 
-```bash
+```sh
 pre-commit run --all-files
 ```
 
-- Linting without modifying code can be done with: `make lint`
-- Auto-formatting without other lint checks can be done with: `black .`
+This includes the linting and autoformatting done by Ruff, as well as some other checks.
 
 To typecheck, run:
 
-```bash
-mypy -p git
+```sh
+mypy
 ```
 
 #### CI (and tox)
 
-The same linting, and running tests on all the different supported Python versions, will be performed:
+Style and formatting checks, and running tests on all the different supported Python versions, will be performed:
 
 - Upon submitting a pull request.
 - On each push, *if* you have a fork with GitHub Actions enabled.
@@ -182,10 +180,12 @@ The same linting, and running tests on all the different supported Python versio
 
 #### Configuration files
 
-Specific tools:
+Specific tools are all configured in the `./pyproject.toml` file:
 
-- Configurations for `mypy`, `pytest`, `coverage.py`, and `black` are in `./pyproject.toml`.
-- Configuration for `flake8` is in the `./.flake8` file.
+- `pytest` (test runner)
+- `coverage.py` (code coverage)
+- `ruff` (linter and formatter)
+- `mypy` (type checker)
 
 Orchestration tools:
 
@@ -220,57 +220,6 @@ Please have a look at the [contributions file][contributing].
 6. Run `make release`.
 7. Go to [GitHub Releases](https://github.com/gitpython-developers/GitPython/releases) and publish a new one with the recently pushed tag. Generate the changelog.
 
-### How to verify a release (DEPRECATED)
-
-Note that what follows is deprecated and future releases won't be signed anymore.
-More details about how it came to that can be found [in this issue](https://github.com/gitpython-developers/gitdb/issues/77).
-
-----
-
-Please only use releases from `pypi` as you can verify the respective source
-tarballs.
-
-This script shows how to verify the tarball was indeed created by the authors of
-this project:
-
-```bash
-curl https://files.pythonhosted.org/packages/09/bc/ae32e07e89cc25b9e5c793d19a1e5454d30a8e37d95040991160f942519e/GitPython-3.1.8-py3-none-any.whl > gitpython.whl
-curl https://files.pythonhosted.org/packages/09/bc/ae32e07e89cc25b9e5c793d19a1e5454d30a8e37d95040991160f942519e/GitPython-3.1.8-py3-none-any.whl.asc >  gitpython-signature.asc
-gpg --verify gitpython-signature.asc gitpython.whl
-```
-
-which outputs
-
-```bash
-gpg: Signature made Fr  4 Sep 10:04:50 2020 CST
-gpg:                using RSA key 27C50E7F590947D7273A741E85194C08421980C9
-gpg: Good signature from "Sebastian Thiel (YubiKey USB-C) <byronimo@gmail.com>" [ultimate]
-gpg:                 aka "Sebastian Thiel (In Rust I trust) <sebastian.thiel@icloud.com>" [ultimate]
-```
-
-You can verify that the keyid indeed matches the release-signature key provided in this
-repository by looking at the keys details:
-
-```bash
-gpg --list-packets ./release-verification-key.asc
-```
-
-You can verify that the commit adding it was also signed by it using:
-
-```bash
-git show --show-signature  ./release-verification-key.asc
-```
-
-If you would like to trust it permanently, you can import and sign it:
-
-```bash
-gpg --import ./release-verification-key.asc
-gpg --edit-key 4C08421980C9
-
-> sign
-> save
-```
-
 ### Projects using GitPython
 
 - [PyDriller](https://github.com/ishepard/pydriller)
@@ -290,6 +239,9 @@ gpg --edit-key 4C08421980C9
 ### LICENSE
 
 [3-Clause BSD License](https://opensource.org/license/bsd-3-clause/), also known as the New BSD License. See the [LICENSE file][license].
+
+One file exclusively used for fuzz testing is subject to [a separate license, detailed here](./fuzzing/README.md#license).
+This file is not included in the wheel or sdist packages published by the maintainers of GitPython.
 
 [contributing]: https://github.com/gitpython-developers/GitPython/blob/main/CONTRIBUTING.md
 [license]: https://github.com/gitpython-developers/GitPython/blob/main/LICENSE

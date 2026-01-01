@@ -3,28 +3,27 @@
 # This module is part of GitPython and is released under the
 # 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
 
+import contextlib
+from dataclasses import dataclass
 from io import BytesIO
 import logging
 import os
 import os.path as osp
 from pathlib import Path
 import re
+import shutil
 from stat import S_ISLNK, ST_MODE
 import subprocess
+import sys
 import tempfile
+from unittest import mock
 
+from gitdb.base import IStream
+
+import ddt
 import pytest
-from sumtypes import constructor, sumtype
 
-from git import (
-    BlobFilter,
-    Diff,
-    Git,
-    IndexFile,
-    Object,
-    Repo,
-    Tree,
-)
+from git import BlobFilter, Diff, Git, IndexFile, Object, Repo, Tree
 from git.exc import (
     CheckoutError,
     GitCommandError,
@@ -32,16 +31,17 @@ from git.exc import (
     InvalidGitRepositoryError,
     UnmergedEntriesError,
 )
-from git.index.fun import hook_path
+from git.index.fun import hook_path, run_commit_hook
 from git.index.typ import BaseIndexEntry, IndexEntry
+from git.index.util import TemporaryFileSwap
 from git.objects import Blob
-from test.lib import TestBase, fixture, fixture_path, with_rw_directory, with_rw_repo
-from git.util import Actor, hex_to_bin, rmtree
-from gitdb.base import IStream
+from git.util import Actor, cwd, hex_to_bin, rmtree
+
+from test.lib import TestBase, VirtualEnvironment, fixture, fixture_path, with_rw_directory, with_rw_repo, PathLikeMock
 
 HOOKS_SHEBANG = "#!/usr/bin/env sh\n"
 
-log = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 
 def _get_windows_ansi_encoding():
@@ -55,34 +55,48 @@ def _get_windows_ansi_encoding():
     return f"cp{value}"
 
 
-@sumtype
 class WinBashStatus:
-    """Status of bash.exe for native Windows. Affects which commit hook tests can pass.
+    """Namespace of native-Windows bash.exe statuses. Affects what hook tests can pass.
 
     Call check() to check the status. (CheckError and WinError should not typically be
     used to trigger skip or xfail, because they represent unexpected situations.)
     """
 
-    Inapplicable = constructor()
-    """This system is not native Windows: either not Windows at all, or Cygwin."""
+    @dataclass
+    class Inapplicable:
+        """This system is not native Windows: either not Windows at all, or Cygwin."""
 
-    Absent = constructor()
-    """No command for bash.exe is found on the system."""
+    @dataclass
+    class Absent:
+        """No command for bash.exe is found on the system."""
 
-    Native = constructor()
-    """Running bash.exe operates outside any WSL distribution (as with Git Bash)."""
+    @dataclass
+    class Native:
+        """Running bash.exe operates outside any WSL distribution (as with Git Bash)."""
 
-    Wsl = constructor()
-    """Running bash.exe calls bash in a WSL distribution."""
+    @dataclass
+    class Wsl:
+        """Running bash.exe calls bash in a WSL distribution."""
 
-    WslNoDistro = constructor("process", "message")
-    """Running bash.exe tries to run bash on a WSL distribution, but none exists."""
+    @dataclass
+    class WslNoDistro:
+        """Running bash.exe tries to run bash on a WSL distribution, but none exists."""
 
-    CheckError = constructor("process", "message")
-    """Running bash.exe fails in an unexpected error or gives unexpected output."""
+        process: "subprocess.CompletedProcess[bytes]"
+        message: str
 
-    WinError = constructor("exception")
-    """bash.exe may exist but can't run. CreateProcessW fails unexpectedly."""
+    @dataclass
+    class CheckError:
+        """Running bash.exe fails in an unexpected error or gives unexpected output."""
+
+        process: "subprocess.CompletedProcess[bytes]"
+        message: str
+
+    @dataclass
+    class WinError:
+        """bash.exe may exist but can't run. CreateProcessW fails unexpectedly."""
+
+        exception: OSError
 
     @classmethod
     def check(cls):
@@ -99,7 +113,7 @@ class WinBashStatus:
         in System32; Popen finds it even if a shell would run another one, as on CI.
         (Without WSL, System32 may still have bash.exe; users sometimes put it there.)
         """
-        if os.name != "nt":
+        if sys.platform != "win32":
             return cls.Inapplicable()
 
         try:
@@ -119,13 +133,13 @@ class WinBashStatus:
         if process.returncode == 1 and re.search(r"\bhttps://aka.ms/wslstore\b", text):
             return cls.WslNoDistro(process, text)
         if process.returncode != 0:
-            log.error("Error running bash.exe to check WSL status: %s", text)
+            _logger.error("Error running bash.exe to check WSL status: %s", text)
             return cls.CheckError(process, text)
         if text == "0":
             return cls.Wsl()
         if text == "1":
             return cls.Native()
-        log.error("Strange output checking WSL status: %s", text)
+        _logger.error("Strange output checking WSL status: %s", text)
         return cls.CheckError(process, text)
 
     @staticmethod
@@ -149,7 +163,7 @@ class WinBashStatus:
         except UnicodeDecodeError:
             pass
         except LookupError as error:
-            log.warning("%s", str(error))  # Message already says "Unknown encoding:".
+            _logger.warning(str(error))  # Message already says "Unknown encoding:".
 
         # Assume UTF-8. If invalid, substitute Unicode replacement characters.
         return stdout.decode("utf-8", errors="replace")
@@ -171,6 +185,7 @@ def _make_hook(git_dir, name, content, make_exec=True):
     return hp
 
 
+@ddt.ddt
 class TestIndex(TestBase):
     def __init__(self, *args):
         super().__init__(*args)
@@ -193,8 +208,7 @@ class TestIndex(TestBase):
         self._fprogress_map[path] = curval + 1
 
     def _fprogress_add(self, path, done, item):
-        """Called as progress func - we keep track of the proper
-        call order"""
+        """Called as progress func - we keep track of the proper call order."""
         assert item is not None
         self._fprogress(path, done, item)
 
@@ -309,7 +323,10 @@ class TestIndex(TestBase):
         assert len([e for e in three_way_index.entries.values() if e.stage != 0])
 
         # ITERATE BLOBS
-        merge_required = lambda t: t[0] != 0
+
+        def merge_required(t):
+            return t[0] != 0
+
         merge_blobs = list(three_way_index.iter_blobs(merge_required))
         assert merge_blobs
         assert merge_blobs[0][0] in (1, 2, 3)
@@ -359,17 +376,17 @@ class TestIndex(TestBase):
 
         # FAKE MERGE
         #############
-        # Add a change with a NULL sha that should conflict with next_commit. We
-        # pretend there was a change, but we do not even bother adding a proper
-        # sha for it (which makes things faster of course).
+        # Add a change with a NULL sha that should conflict with next_commit. We pretend
+        # there was a change, but we do not even bother adding a proper sha for it
+        # (which makes things faster of course).
         manifest_fake_entry = BaseIndexEntry((manifest_entry[0], b"\0" * 20, 0, manifest_entry[3]))
         # Try write flag.
         self._assert_entries(rw_repo.index.add([manifest_fake_entry], write=False))
-        # Add actually resolves the null-hex-sha for us as a feature, but we can
-        # edit the index manually.
+        # Add actually resolves the null-hex-sha for us as a feature, but we can edit
+        # the index manually.
         assert rw_repo.index.entries[manifest_key].binsha != Object.NULL_BIN_SHA
-        # We must operate on the same index for this! It's a bit problematic as
-        # it might confuse people.
+        # We must operate on the same index for this! It's a bit problematic as it might
+        # confuse people.
         index = rw_repo.index
         index.entries[manifest_key] = IndexEntry.from_base(manifest_fake_entry)
         index.write()
@@ -378,19 +395,20 @@ class TestIndex(TestBase):
         # Write an unchanged index (just for the fun of it).
         rw_repo.index.write()
 
-        # A three way merge would result in a conflict and fails as the command will
-        # not overwrite any entries in our index and hence leave them unmerged. This is
+        # A three way merge would result in a conflict and fails as the command will not
+        # overwrite any entries in our index and hence leave them unmerged. This is
         # mainly a protection feature as the current index is not yet in a tree.
         self.assertRaises(GitCommandError, index.merge_tree, next_commit, base=parent_commit)
 
-        # The only way to get the merged entries is to safe the current index away into a tree,
-        # which is like a temporary commit for us. This fails as well as the NULL sha does not
-        # have a corresponding object.
+        # The only way to get the merged entries is to safe the current index away into
+        # a tree, which is like a temporary commit for us. This fails as well as the
+        # NULL sha does not have a corresponding object.
         # NOTE: missing_ok is not a kwarg anymore, missing_ok is always true.
         # self.assertRaises(GitCommandError, index.write_tree)
 
-        # If missing objects are okay, this would work though (they are always okay now).
-        # As we can't read back the tree with NULL_SHA, we rather set it to something else.
+        # If missing objects are okay, this would work though (they are always okay
+        # now). As we can't read back the tree with NULL_SHA, we rather set it to
+        # something else.
         index.entries[manifest_key] = IndexEntry(manifest_entry[:1] + (hex_to_bin("f" * 40),) + manifest_entry[2:])
         tree = index.write_tree()
 
@@ -402,7 +420,7 @@ class TestIndex(TestBase):
 
     @with_rw_repo("0.1.6")
     def test_index_file_diffing(self, rw_repo):
-        # Default Index instance points to our index.
+        # Default IndexFile instance points to our index.
         index = IndexFile(rw_repo)
         assert index.path is not None
         assert len(index.entries)
@@ -413,8 +431,8 @@ class TestIndex(TestBase):
         # Could sha it, or check stats.
 
         # Test diff.
-        # Resetting the head will leave the index in a different state, and the
-        # diff will yield a few changes.
+        # Resetting the head will leave the index in a different state, and the diff
+        # will yield a few changes.
         cur_head_commit = rw_repo.head.reference.commit
         rw_repo.head.reset("HEAD~6", index=True, working_tree=False)
 
@@ -502,7 +520,7 @@ class TestIndex(TestBase):
             index.checkout(test_file)
         except CheckoutError as e:
             # Detailed exceptions are only possible in older git versions.
-            if rw_repo.git._version_info < (2, 29):
+            if rw_repo.git.version_info < (2, 29):
                 self.assertEqual(len(e.failed_files), 1)
                 self.assertEqual(e.failed_files[0], osp.basename(test_file))
                 self.assertEqual(len(e.failed_files), len(e.failed_reasons))
@@ -535,7 +553,7 @@ class TestIndex(TestBase):
     # END num existing helper
 
     @pytest.mark.xfail(
-        os.name == "nt" and Git().config("core.symlinks") == "true",
+        sys.platform == "win32" and Git().config("core.symlinks") == "true",
         reason="Assumes symlinks are not created on Windows and opens a symlink to a nonexistent target.",
         raises=FileNotFoundError,
     )
@@ -557,14 +575,20 @@ class TestIndex(TestBase):
         def mixed_iterator():
             count = 0
             for entry in index.entries.values():
-                type_id = count % 4
-                if type_id == 0:  # path
+                type_id = count % 5
+                if type_id == 0:  # path (str)
                     yield entry.path
-                elif type_id == 1:  # blob
+                elif type_id == 1:  # path (PathLike)
+                    yield Path(entry.path)
+                elif type_id == 2:  # path mock (PathLike)
+                    yield PathLikeMock(entry.path)
+                elif type_id == 3:  # path mock in a blob
                     yield Blob(rw_repo, entry.binsha, entry.mode, entry.path)
-                elif type_id == 2:  # BaseIndexEntry
+                elif type_id == 4:  # blob
+                    yield Blob(rw_repo, entry.binsha, entry.mode, entry.path)
+                elif type_id == 5:  # BaseIndexEntry
                     yield BaseIndexEntry(entry[:4])
-                elif type_id == 3:  # IndexEntry
+                elif type_id == 6:  # IndexEntry
                     yield entry
                 else:
                     raise AssertionError("Invalid Type")
@@ -726,7 +750,7 @@ class TestIndex(TestBase):
         self.assertNotEqual(entries[0].hexsha, null_hex_sha)
 
         # Add symlink.
-        if os.name != "nt":
+        if sys.platform != "win32":
             for target in ("/etc/nonexisting", "/etc/passwd", "/etc"):
                 basename = "my_real_symlink"
 
@@ -784,7 +808,7 @@ class TestIndex(TestBase):
         index.checkout(fake_symlink_path)
 
         # On Windows, we currently assume we will never get symlinks.
-        if os.name == "nt":
+        if sys.platform == "win32":
             # Symlinks should contain the link as text (which is what a
             # symlink actually is).
             with open(fake_symlink_path, "rt") as fd:
@@ -928,10 +952,10 @@ class TestIndex(TestBase):
 
     @with_rw_repo("HEAD", bare=True)
     def test_index_bare_add(self, rw_bare_repo):
-        # Something is wrong after cloning to a bare repo, reading the
-        # property rw_bare_repo.working_tree_dir will return '/tmp'
-        # instead of throwing the Exception we are expecting. This is
-        # a quick hack to make this test fail when expected.
+        # Something is wrong after cloning to a bare repo, reading the property
+        # rw_bare_repo.working_tree_dir will return '/tmp' instead of throwing the
+        # Exception we are expecting. This is a quick hack to make this test fail when
+        # expected.
         assert rw_bare_repo.working_tree_dir is None
         assert rw_bare_repo.bare
         contents = b"This is a BytesIO file"
@@ -956,7 +980,8 @@ class TestIndex(TestBase):
 
     @with_rw_directory
     def test_add_utf8P_path(self, rw_dir):
-        # NOTE: fp is not a Unicode object in Python 2 (which is the source of the problem).
+        # NOTE: fp is not a Unicode object in Python 2
+        # (which is the source of the problem).
         fp = osp.join(rw_dir, "ø.txt")
         with open(fp, "wb") as fs:
             fs.write("content of ø".encode("utf-8"))
@@ -991,9 +1016,94 @@ class TestIndex(TestBase):
         rel = index._to_relative_path(path)
         self.assertEqual(rel, os.path.relpath(path, root))
 
+    def test__to_relative_path_absolute_trailing_slash(self):
+        repo_root = os.path.join(osp.abspath(os.sep), "directory1", "repo_root")
+
+        class Mocked:
+            bare = False
+            git_dir = repo_root
+            working_tree_dir = repo_root
+
+        repo = Mocked()
+        path = os.path.join(repo_root, f"directory2{os.sep}")
+        index = IndexFile(repo)
+
+        expected_path = f"directory2{os.sep}"
+        actual_path = index._to_relative_path(path)
+        self.assertEqual(expected_path, actual_path)
+
+        with mock.patch("git.index.base.os.path") as ospath_mock:
+            ospath_mock.relpath.return_value = f"directory2{os.sep}"
+            actual_path = index._to_relative_path(path)
+            self.assertEqual(expected_path, actual_path)
+
+    @pytest.mark.xfail(
+        type(_win_bash_status) is WinBashStatus.Absent,
+        reason="Can't run a hook on Windows without bash.exe.",
+        raises=HookExecutionError,
+    )
     @pytest.mark.xfail(
         type(_win_bash_status) is WinBashStatus.WslNoDistro,
-        reason="Currently uses the bash.exe for WSL even with no WSL distro installed",
+        reason="Currently uses the bash.exe of WSL, even with no WSL distro installed",
+        raises=HookExecutionError,
+    )
+    @with_rw_repo("HEAD", bare=True)
+    def test_run_commit_hook(self, rw_repo):
+        index = rw_repo.index
+        _make_hook(index.repo.git_dir, "fake-hook", "echo 'ran fake hook' >output.txt")
+        run_commit_hook("fake-hook", index)
+        output = Path(rw_repo.git_dir, "output.txt").read_text(encoding="utf-8")
+        self.assertEqual(output, "ran fake hook\n")
+
+    @ddt.data((False,), (True,))
+    @with_rw_directory
+    def test_hook_uses_shell_not_from_cwd(self, rw_dir, case):
+        (chdir_to_repo,) = case
+
+        shell_name = "bash.exe" if sys.platform == "win32" else "sh"
+        maybe_chdir = cwd(rw_dir) if chdir_to_repo else contextlib.nullcontext()
+        repo = Repo.init(rw_dir)
+
+        # We need an impostor shell that works on Windows and that the test can
+        # distinguish from the real bash.exe. But even if the real bash.exe is absent or
+        # unusable, we should verify the impostor is not run. So the impostor needs a
+        # clear side effect (unlike in TestGit.test_it_executes_git_not_from_cwd). Popen
+        # on Windows uses CreateProcessW, which disregards PATHEXT; the impostor may
+        # need to be a binary executable to ensure the vulnerability is found if
+        # present. No compiler need exist, shipping a binary in the test suite may
+        # target the wrong architecture, and generating one in a bespoke way may trigger
+        # false positive virus scans. So we use a Bash/Python polyglot for the hook and
+        # use the Python interpreter itself as the bash.exe impostor. But an interpreter
+        # from a venv may not run when copied outside of it, and a global interpreter
+        # won't run when copied to a different location if it was installed from the
+        # Microsoft Store. So we make a new venv in rw_dir and use its interpreter.
+        venv = VirtualEnvironment(rw_dir, with_pip=False)
+        shutil.copy(venv.python, Path(rw_dir, shell_name))
+        shutil.copy(fixture_path("polyglot"), hook_path("polyglot", repo.git_dir))
+        payload = Path(rw_dir, "payload.txt")
+
+        if type(_win_bash_status) in {WinBashStatus.Absent, WinBashStatus.WslNoDistro}:
+            # The real shell can't run, but the impostor should still not be used.
+            with self.assertRaises(HookExecutionError):
+                with maybe_chdir:
+                    run_commit_hook("polyglot", repo.index)
+            self.assertFalse(payload.exists())
+        else:
+            # The real shell should run, and not the impostor.
+            with maybe_chdir:
+                run_commit_hook("polyglot", repo.index)
+            self.assertFalse(payload.exists())
+            output = Path(rw_dir, "output.txt").read_text(encoding="utf-8")
+            self.assertEqual(output, "Ran intended hook.\n")
+
+    @pytest.mark.xfail(
+        type(_win_bash_status) is WinBashStatus.Absent,
+        reason="Can't run a hook on Windows without bash.exe.",
+        raises=HookExecutionError,
+    )
+    @pytest.mark.xfail(
+        type(_win_bash_status) is WinBashStatus.WslNoDistro,
+        reason="Currently uses the bash.exe of WSL, even with no WSL distro installed",
         raises=HookExecutionError,
     )
     @with_rw_repo("HEAD", bare=True)
@@ -1004,7 +1114,7 @@ class TestIndex(TestBase):
 
     @pytest.mark.xfail(
         type(_win_bash_status) is WinBashStatus.WslNoDistro,
-        reason="Currently uses the bash.exe for WSL even with no WSL distro installed",
+        reason="Currently uses the bash.exe of WSL, even with no WSL distro installed",
         raises=AssertionError,
     )
     @with_rw_repo("HEAD", bare=True)
@@ -1030,13 +1140,18 @@ class TestIndex(TestBase):
             raise AssertionError("Should have caught a HookExecutionError")
 
     @pytest.mark.xfail(
-        type(_win_bash_status) in {WinBashStatus.Absent, WinBashStatus.Wsl},
+        type(_win_bash_status) is WinBashStatus.Absent,
+        reason="Can't run a hook on Windows without bash.exe.",
+        raises=HookExecutionError,
+    )
+    @pytest.mark.xfail(
+        type(_win_bash_status) is WinBashStatus.Wsl,
         reason="Specifically seems to fail on WSL bash (in spite of #1399)",
         raises=AssertionError,
     )
     @pytest.mark.xfail(
         type(_win_bash_status) is WinBashStatus.WslNoDistro,
-        reason="Currently uses the bash.exe for WSL even with no WSL distro installed",
+        reason="Currently uses the bash.exe of WSL, even with no WSL distro installed",
         raises=HookExecutionError,
     )
     @with_rw_repo("HEAD", bare=True)
@@ -1054,7 +1169,7 @@ class TestIndex(TestBase):
 
     @pytest.mark.xfail(
         type(_win_bash_status) is WinBashStatus.WslNoDistro,
-        reason="Currently uses the bash.exe for WSL even with no WSL distro installed",
+        reason="Currently uses the bash.exe of WSL, even with no WSL distro installed",
         raises=AssertionError,
     )
     @with_rw_repo("HEAD", bare=True)
@@ -1080,10 +1195,95 @@ class TestIndex(TestBase):
             raise AssertionError("Should have caught a HookExecutionError")
 
     @with_rw_repo("HEAD")
-    def test_index_add_pathlike(self, rw_repo):
+    def test_index_add_pathlib(self, rw_repo):
         git_dir = Path(rw_repo.git_dir)
 
         file = git_dir / "file.txt"
         file.touch()
 
         rw_repo.index.add(file)
+
+    @with_rw_repo("HEAD")
+    def test_index_add_pathlike(self, rw_repo):
+        git_dir = Path(rw_repo.git_dir)
+
+        file = git_dir / "file.txt"
+        file.touch()
+
+        rw_repo.index.add(PathLikeMock(str(file)))
+
+    @with_rw_repo("HEAD")
+    def test_index_add_non_normalized_path(self, rw_repo):
+        git_dir = Path(rw_repo.git_dir)
+
+        file = git_dir / "file.txt"
+        file.touch()
+        non_normalized_path = file.as_posix()
+        if os.name != "nt":
+            non_normalized_path = "/" + non_normalized_path[1:].replace("/", "//")
+
+        rw_repo.index.add(non_normalized_path)
+
+    def test_index_file_v3(self):
+        index = IndexFile(self.rorepo, fixture_path("index_extended_flags"))
+        assert index.entries
+        assert index.version == 3
+        assert len(index.entries) == 4
+        assert index.entries[("init.t", 0)].skip_worktree
+
+        # Write the data - it must match the original.
+        with tempfile.NamedTemporaryFile() as tmpfile:
+            index.write(tmpfile.name)
+            assert Path(tmpfile.name).read_bytes() == Path(fixture_path("index_extended_flags")).read_bytes()
+
+    @with_rw_directory
+    def test_index_file_v3_with_git_command(self, tmp_dir):
+        tmp_dir = Path(tmp_dir)
+        with cwd(tmp_dir):
+            git = Git(tmp_dir)
+            git.init()
+
+            file = tmp_dir / "file.txt"
+            file.write_text("hello")
+            git.add("--intent-to-add", "file.txt")  # intent-to-add sets extended flag
+
+            repo = Repo(tmp_dir)
+            index = repo.index
+
+            assert len(index.entries) == 1
+            assert index.version == 3
+            entry = list(index.entries.values())[0]
+            assert entry.path == "file.txt"
+            assert entry.intent_to_add
+
+            file2 = tmp_dir / "file2.txt"
+            file2.write_text("world")
+            index.add(["file2.txt"])
+            index.write()
+
+            status_str = git.status(porcelain=True)
+            status_lines = status_str.splitlines()
+            assert " A file.txt" in status_lines
+            assert "A  file2.txt" in status_lines
+
+
+class TestIndexUtils:
+    @pytest.mark.parametrize("file_path_type", [str, Path])
+    def test_temporary_file_swap(self, tmp_path, file_path_type):
+        file_path = tmp_path / "foo"
+        file_path.write_bytes(b"some data")
+
+        with TemporaryFileSwap(file_path_type(file_path)) as ctx:
+            assert Path(ctx.file_path) == file_path
+            assert not file_path.exists()
+
+            # Recreate it with new data, so we can observe that they're really separate.
+            file_path.write_bytes(b"other data")
+
+            temp_file_path = Path(ctx.tmp_file_path)
+            assert temp_file_path.parent == file_path.parent
+            assert temp_file_path.name.startswith(file_path.name)
+            assert temp_file_path.read_bytes() == b"some data"
+
+        assert not temp_file_path.exists()
+        assert file_path.read_bytes() == b"some data"  # Not b"other data".

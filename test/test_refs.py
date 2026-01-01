@@ -4,27 +4,28 @@
 # 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
 
 from itertools import chain
+import os.path as osp
 from pathlib import Path
+import tempfile
 
-from git import (
-    Reference,
-    Head,
-    TagReference,
-    RemoteReference,
-    Commit,
-    SymbolicReference,
-    GitCommandError,
-    RefLog,
-    GitConfigParser,
-)
-from git.objects.tag import TagObject
-from test.lib import TestBase, with_rw_repo
-from git.util import Actor
 from gitdb.exc import BadName
 
+from git import (
+    Commit,
+    GitCommandError,
+    GitConfigParser,
+    Head,
+    RefLog,
+    Reference,
+    RemoteReference,
+    SymbolicReference,
+    TagReference,
+)
+from git.objects.tag import TagObject
 import git.refs as refs
-import os.path as osp
-import tempfile
+from git.util import Actor
+
+from test.lib import TestBase, with_rw_repo, PathLikeMock
 
 
 class TestRefs(TestBase):
@@ -42,6 +43,25 @@ class TestRefs(TestBase):
         self.assertRaises(ValueError, TagReference, self.rorepo, "refs/invalid/tag")
         # Works without path check.
         TagReference(self.rorepo, "refs/invalid/tag", check_path=False)
+        # Check remoteness
+        assert Reference(self.rorepo, "refs/remotes/origin").is_remote()
+
+    def test_from_pathlike(self):
+        # Should be able to create any reference directly.
+        for ref_type in (Reference, Head, TagReference, RemoteReference):
+            for name in ("rela_name", "path/rela_name"):
+                full_path = ref_type.to_full_path(PathLikeMock(name))
+                instance = ref_type.from_path(self.rorepo, PathLikeMock(full_path))
+                assert isinstance(instance, ref_type)
+            # END for each name
+        # END for each type
+
+        # Invalid path.
+        self.assertRaises(ValueError, TagReference, self.rorepo, "refs/invalid/tag")
+        # Works without path check.
+        TagReference(self.rorepo, PathLikeMock("refs/invalid/tag"), check_path=False)
+        # Check remoteness
+        assert Reference(self.rorepo, PathLikeMock("refs/remotes/origin")).is_remote()
 
     def test_tag_base(self):
         tag_object_refs = []
@@ -245,8 +265,8 @@ class TestRefs(TestBase):
         cur_head.reset(new_head_commit)
         rw_repo.index.checkout(["lib"], force=True)
 
-        # Now that we have a write write repo, change the HEAD reference - it's
-        # like "git-reset --soft".
+        # Now that we have a write write repo, change the HEAD reference - it's like
+        # "git-reset --soft".
         heads = rw_repo.heads
         assert heads
         for head in heads:
@@ -349,8 +369,8 @@ class TestRefs(TestBase):
         for remote in remotes:
             refs = remote.refs
 
-            # If a HEAD exists, it must be deleted first. Otherwise it might
-            # end up pointing to an invalid ref it the ref was deleted before.
+            # If a HEAD exists, it must be deleted first. Otherwise it might end up
+            # pointing to an invalid ref it the ref was deleted before.
             remote_head_name = "HEAD"
             if remote_head_name in refs:
                 RemoteReference.delete(rw_repo, refs[remote_head_name])
@@ -383,7 +403,7 @@ class TestRefs(TestBase):
         # Setting a non-commit as commit fails, but succeeds as object.
         head_tree = head.commit.tree
         self.assertRaises(ValueError, setattr, head, "commit", head_tree)
-        assert head.commit == old_commit  # and the ref did not change
+        assert head.commit == old_commit  # And the ref did not change.
         # We allow heads to point to any object.
         head.object = head_tree
         assert head.object == head_tree
@@ -492,8 +512,8 @@ class TestRefs(TestBase):
         # Would raise if the symref wouldn't have been deleted (probably).
         symref = SymbolicReference.create(rw_repo, symref_path, cur_head.reference)
 
-        # Test symbolic references which are not at default locations like HEAD
-        # or FETCH_HEAD - they may also be at spots in refs of course.
+        # Test symbolic references which are not at default locations like HEAD or
+        # FETCH_HEAD - they may also be at spots in refs of course.
         symbol_ref_path = "refs/symbol_ref"
         symref = SymbolicReference(rw_repo, symbol_ref_path)
         assert symref.path == symbol_ref_path
@@ -525,14 +545,13 @@ class TestRefs(TestBase):
         assert active_branch in heads
         assert rw_repo.tags
 
-        # We should be able to iterate all symbolic refs as well - in that case
-        # we should expect only symbolic references to be returned.
+        # We should be able to iterate all symbolic refs as well - in that case we
+        # should expect only symbolic references to be returned.
         for symref in SymbolicReference.iter_items(rw_repo):
             assert not symref.is_detached
 
-        # When iterating references, we can get references and symrefs
-        # when deleting all refs, I'd expect them to be gone! Even from
-        # the packed ones.
+        # When iterating references, we can get references and symrefs when deleting all
+        # refs, I'd expect them to be gone! Even from the packed ones.
         # For this to work, we must not be on any branch.
         rw_repo.head.reference = rw_repo.head.commit
         deleted_refs = set()
@@ -577,9 +596,9 @@ class TestRefs(TestBase):
             self.assertRaises(ValueError, setattr, ref, "commit", "nonsense")
             assert not ref.is_valid()
 
-            # I am sure I had my reason to make it a class method at first, but
-            # now it doesn't make so much sense anymore, want an instance method as well
-            # See http://byronimo.lighthouseapp.com/projects/51787-gitpython/tickets/27
+            # I am sure I had my reason to make it a class method at first, but now it
+            # doesn't make so much sense anymore, want an instance method as well. See:
+            # http://byronimo.lighthouseapp.com/projects/51787-gitpython/tickets/27
             Reference.delete(ref.repo, ref.path)
             assert not ref.is_valid()
 
@@ -619,8 +638,8 @@ class TestRefs(TestBase):
 
     def test_refs_outside_repo(self):
         # Create a file containing a valid reference outside the repository. Attempting
-        # to access it should raise an exception, due to it containing a parent directory
-        # reference ('..'). This tests for CVE-2023-41040.
+        # to access it should raise an exception, due to it containing a parent
+        # directory reference ('..'). This tests for CVE-2023-41040.
         git_dir = Path(self.rorepo.git_dir)
         repo_parent_dir = git_dir.parent.parent
         with tempfile.NamedTemporaryFile(dir=repo_parent_dir) as ref_file:
@@ -630,37 +649,52 @@ class TestRefs(TestBase):
             self.assertRaises(BadName, self.rorepo.commit, f"../../{ref_file_name}")
 
     def test_validity_ref_names(self):
+        """Ensure ref names are checked for validity.
+
+        This is based on the rules specified in:
+        https://git-scm.com/docs/git-check-ref-format/#_description
+        """
         check_ref = SymbolicReference._check_ref_name_valid
-        # Based on the rules specified in https://git-scm.com/docs/git-check-ref-format/#_description.
+
         # Rule 1
         self.assertRaises(ValueError, check_ref, ".ref/begins/with/dot")
         self.assertRaises(ValueError, check_ref, "ref/component/.begins/with/dot")
         self.assertRaises(ValueError, check_ref, "ref/ends/with/a.lock")
         self.assertRaises(ValueError, check_ref, "ref/component/ends.lock/with/period_lock")
+
         # Rule 2
         check_ref("valid_one_level_refname")
+
         # Rule 3
         self.assertRaises(ValueError, check_ref, "ref/contains/../double/period")
+
         # Rule 4
         for c in " ~^:":
             self.assertRaises(ValueError, check_ref, f"ref/contains/invalid{c}/character")
         for code in range(0, 32):
             self.assertRaises(ValueError, check_ref, f"ref/contains/invalid{chr(code)}/ASCII/control_character")
         self.assertRaises(ValueError, check_ref, f"ref/contains/invalid{chr(127)}/ASCII/control_character")
+
         # Rule 5
         for c in "*?[":
             self.assertRaises(ValueError, check_ref, f"ref/contains/invalid{c}/character")
+
         # Rule 6
         self.assertRaises(ValueError, check_ref, "/ref/begins/with/slash")
         self.assertRaises(ValueError, check_ref, "ref/ends/with/slash/")
         self.assertRaises(ValueError, check_ref, "ref/contains//double/slash/")
+
         # Rule 7
         self.assertRaises(ValueError, check_ref, "ref/ends/with/dot.")
+
         # Rule 8
         self.assertRaises(ValueError, check_ref, "ref/contains@{/at_brace")
+
         # Rule 9
         self.assertRaises(ValueError, check_ref, "@")
+
         # Rule 10
         self.assertRaises(ValueError, check_ref, "ref/contain\\s/backslash")
+
         # Valid reference name should not raise.
         check_ref("valid/ref/name")

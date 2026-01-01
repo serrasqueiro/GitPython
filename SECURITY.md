@@ -11,5 +11,6 @@ Only the latest version of GitPython can receive security updates. If a vulnerab
 
 ## Reporting a Vulnerability
 
-Please report private portions of a vulnerability to sebastian.thiel@icloud.com that would help to reproduce and fix it. To receive updates on progress and provide
-general information to the public, you can create an issue [on the issue tracker](https://github.com/gitpython-developers/GitPython/issues).
+Please report private portions of a vulnerability to <https://github.com/gitpython-developers/GitPython/security/advisories/new>. Doing so helps to receive updates and collaborate on the matter, without disclosing it publicly right away.
+
+Vulnerabilities in GitPython's dependencies [gitdb](https://github.com/gitpython-developers/gitdb/blob/master/SECURITY.md) or [smmap](https://github.com/gitpython-developers/smmap/blob/master/SECURITY.md), which primarily exist to support GitPython, can be reported here as well, at that same link. The affected package (`GitPython`, `gitdb`, or `smmap`) can be included in the report, if known.

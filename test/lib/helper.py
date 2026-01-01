@@ -3,17 +3,38 @@
 # This module is part of GitPython and is released under the
 # 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
 
+__all__ = [
+    "fixture_path",
+    "fixture",
+    "StringProcessAdapter",
+    "with_rw_directory",
+    "with_rw_repo",
+    "with_rw_and_rw_remote_repo",
+    "PathLikeMock",
+    "TestBase",
+    "VirtualEnvironment",
+    "TestCase",
+    "SkipTest",
+    "skipIf",
+    "GIT_REPO",
+    "GIT_DAEMON_PORT",
+]
+
 import contextlib
+from dataclasses import dataclass
 from functools import wraps
 import gc
 import io
 import logging
 import os
 import os.path as osp
+import subprocess
+import sys
 import tempfile
 import textwrap
 import time
 import unittest
+import venv
 
 import gitdb
 
@@ -28,22 +49,16 @@ ospd = osp.dirname
 GIT_REPO = os.environ.get("GIT_PYTHON_TEST_GIT_REPO_BASE", ospd(ospd(ospd(__file__))))
 GIT_DAEMON_PORT = os.environ.get("GIT_PYTHON_TEST_GIT_DAEMON_PORT", "19418")
 
-__all__ = (
-    "fixture_path",
-    "fixture",
-    "StringProcessAdapter",
-    "with_rw_directory",
-    "with_rw_repo",
-    "with_rw_and_rw_remote_repo",
-    "TestBase",
-    "TestCase",
-    "SkipTest",
-    "skipIf",
-    "GIT_REPO",
-    "GIT_DAEMON_PORT",
-)
+_logger = logging.getLogger(__name__)
 
-log = logging.getLogger(__name__)
+
+@dataclass
+class PathLikeMock:
+    path: str
+
+    def __fspath__(self) -> str:
+        return self.path
+
 
 # { Routines
 
@@ -88,14 +103,15 @@ def with_rw_directory(func):
     test succeeds, but leave it otherwise to aid additional debugging."""
 
     @wraps(func)
-    def wrapper(self):
+    def wrapper(self, *args, **kwargs):
         path = tempfile.mkdtemp(prefix=func.__name__)
         keep = False
         try:
-            return func(self, path)
+            return func(self, path, *args, **kwargs)
         except Exception:
-            log.info(
-                "Test %s.%s failed, output is at %r\n",
+            _logger.info(
+                "%s %s.%s failed, output is at %r\n",
+                "Test" if func.__name__.startswith("test_") else "Helper",
                 type(self).__name__,
                 func.__name__,
                 path,
@@ -144,8 +160,8 @@ def with_rw_repo(working_tree_ref, bare=False):
             os.chdir(rw_repo.working_dir)
             try:
                 return func(self, rw_repo)
-            except:  # noqa: E722 B001
-                log.info("Keeping repo after failure: %s", repo_dir)
+            except:  # noqa: E722
+                _logger.info("Keeping repo after failure: %s", repo_dir)
                 repo_dir = None
                 raise
             finally:
@@ -173,7 +189,7 @@ def git_daemon_launched(base_path, ip, port):
 
     gd = None
     try:
-        if os.name == "nt":
+        if sys.platform == "win32":
             # On MINGW-git, daemon exists in Git\mingw64\libexec\git-core\,
             # but if invoked as 'git daemon', it detaches from parent `git` cmd,
             # and then CANNOT DIE!
@@ -197,7 +213,7 @@ def git_daemon_launched(base_path, ip, port):
                 as_process=True,
             )
         # Yes, I know... fortunately, this is always going to work if sleep time is just large enough.
-        time.sleep(1.0 if os.name == "nt" else 0.5)
+        time.sleep(1.0 if sys.platform == "win32" else 0.5)
     except Exception as ex:
         msg = textwrap.dedent(
             """
@@ -210,7 +226,7 @@ def git_daemon_launched(base_path, ip, port):
           and setting the environment variable GIT_PYTHON_TEST_GIT_DAEMON_PORT to <port>
         """
         )
-        log.warning(msg, ex, ip, port, base_path, base_path, exc_info=1)
+        _logger.warning(msg, ex, ip, port, base_path, base_path, exc_info=1)
 
         yield  # OK, assume daemon started manually.
 
@@ -219,11 +235,11 @@ def git_daemon_launched(base_path, ip, port):
     finally:
         if gd:
             try:
-                log.debug("Killing git-daemon...")
+                _logger.debug("Killing git-daemon...")
                 gd.proc.kill()
             except Exception as ex:
                 # Either it has died (and we're here), or it won't die, again here...
-                log.debug("Hidden error while Killing git-daemon: %s", ex, exc_info=1)
+                _logger.debug("Hidden error while Killing git-daemon: %s", ex, exc_info=1)
 
 
 def with_rw_and_rw_remote_repo(working_tree_ref):
@@ -304,8 +320,8 @@ def with_rw_and_rw_remote_repo(working_tree_ref):
                     with cwd(rw_repo.working_dir):
                         try:
                             return func(self, rw_repo, rw_daemon_repo)
-                        except:  # noqa: E722 B001
-                            log.info(
+                        except:  # noqa: E722
+                            _logger.info(
                                 "Keeping repos after failure: \n  rw_repo_dir: %s \n  rw_daemon_repo_dir: %s",
                                 rw_repo_dir,
                                 rw_daemon_repo_dir,
@@ -343,17 +359,20 @@ class TestBase(TestCase):
     """Base class providing default functionality to all tests such as:
 
     - Utility functions provided by the TestCase base of the unittest method such as::
+
         self.fail("todo")
         self.assertRaises(...)
 
     - Class level repository which is considered read-only as it is shared among
       all test cases in your type.
+
       Access it using::
-      self.rorepo  # 'ro' stands for read-only
+
+        self.rorepo  # 'ro' stands for read-only
 
       The rorepo is in fact your current project's git repo. If you refer to specific
-      shas for your objects, be sure you choose some that are part of the immutable portion
-      of the project history (so that tests don't fail for others).
+      shas for your objects, be sure you choose some that are part of the immutable
+      portion of the project history (so that tests don't fail for others).
     """
 
     def _small_repo_url(self):
@@ -380,8 +399,8 @@ class TestBase(TestCase):
 
     def _make_file(self, rela_path, data, repo=None):
         """
-        Create a file at the given path relative to our repository, filled
-        with the given data.
+        Create a file at the given path relative to our repository, filled with the
+        given data.
 
         :return: An absolute path to the created file.
         """
@@ -390,3 +409,59 @@ class TestBase(TestCase):
         with open(abs_path, "w") as fp:
             fp.write(data)
         return abs_path
+
+
+class VirtualEnvironment:
+    """A newly created Python virtual environment for use in a test."""
+
+    __slots__ = ("_env_dir",)
+
+    def __init__(self, env_dir, *, with_pip):
+        if sys.platform == "win32":
+            self._env_dir = osp.realpath(env_dir)
+            venv.create(self.env_dir, symlinks=False, with_pip=with_pip)
+        else:
+            self._env_dir = env_dir
+            venv.create(self.env_dir, symlinks=True, with_pip=with_pip)
+
+        if with_pip:
+            # The upgrade_deps parameter to venv.create is 3.9+ only, so do it this way.
+            command = [
+                self.python,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "pip",
+                'setuptools; python_version<"3.12"',
+            ]
+            subprocess.check_output(command)
+
+    @property
+    def env_dir(self):
+        """The top-level directory of the environment."""
+        return self._env_dir
+
+    @property
+    def python(self):
+        """Path to the Python executable in the environment."""
+        return self._executable("python")
+
+    @property
+    def pip(self):
+        """Path to the pip executable in the environment, or RuntimeError if absent."""
+        return self._executable("pip")
+
+    @property
+    def sources(self):
+        """Path to a src directory in the environment, which may not exist yet."""
+        return os.path.join(self.env_dir, "src")
+
+    def _executable(self, basename):
+        if sys.platform == "win32":
+            path = osp.join(self.env_dir, "Scripts", basename + ".exe")
+        else:
+            path = osp.join(self.env_dir, "bin", basename)
+        if osp.isfile(path) or osp.islink(path):
+            return path
+        raise RuntimeError(f"no regular file or symlink {path!r}")

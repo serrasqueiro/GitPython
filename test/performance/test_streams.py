@@ -5,18 +5,18 @@
 
 import gc
 import os
+import os.path as osp
 import subprocess
 import sys
 from time import time
 
-from test.lib import with_rw_repo
-from git.util import bin_to_hex
 from gitdb import LooseObjectDB, IStream
 from gitdb.test.lib import make_memory_file
 
-import os.path as osp
+from git.util import bin_to_hex
 
-from .lib import TestBigRepoR
+from test.lib import with_rw_repo
+from test.performance.lib import TestBigRepoR
 
 
 class TestObjDBPerformance(TestBigRepoR):
@@ -25,8 +25,8 @@ class TestObjDBPerformance(TestBigRepoR):
 
     @with_rw_repo("HEAD", bare=True)
     def test_large_data_streaming(self, rwrepo):
-        # TODO: This part overlaps with the same file in gitdb.test.performance.test_stream.
-        # It should be shared if possible.
+        # TODO: This part overlaps with the same file in
+        # gitdb.test.performance.test_stream. It should be shared if possible.
         ldb = LooseObjectDB(osp.join(rwrepo.git_dir, "objects"))
 
         for randomize in range(2):

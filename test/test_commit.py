@@ -6,29 +6,31 @@
 import copy
 from datetime import datetime
 from io import BytesIO
+import os.path as osp
 import re
 import sys
 import time
 from unittest.mock import Mock
 
-from git import (
-    Commit,
-    Actor,
-)
-from git import Repo
-from git.objects.util import tzoffset, utc
-from git.repo.fun import touch
-from test.lib import TestBase, with_rw_repo, fixture_path, StringProcessAdapter
-from test.lib import with_rw_directory
 from gitdb import IStream
 
-import os.path as osp
+from git import Actor, Commit, Repo
+from git.objects.util import tzoffset, utc
+from git.repo.fun import touch
+
+from test.lib import (
+    StringProcessAdapter,
+    TestBase,
+    fixture_path,
+    with_rw_directory,
+    with_rw_repo,
+)
 
 
 class TestCommitSerialization(TestBase):
     def assert_commit_serialization(self, rwrepo, commit_id, print_performance_info=False):
-        """Traverse all commits in the history of commit identified by commit_id and check
-        if the serialization works.
+        """Traverse all commits in the history of commit identified by commit_id and
+        check if the serialization works.
 
         :param print_performance_info: If True, we will show how fast we are.
         """
@@ -133,9 +135,12 @@ class TestCommit(TestCommitSerialization):
         commit = self.rorepo.commit("33ebe7acec14b25c5f84f35a664803fcab2f7781")
         stats = commit.stats
 
-        def check_entries(d):
+        def check_entries(d, has_change_type=False):
             assert isinstance(d, dict)
-            for key in ("insertions", "deletions", "lines"):
+            keys = ("insertions", "deletions", "lines")
+            if has_change_type:
+                keys += ("change_type",)
+            for key in keys:
                 assert key in d
 
         # END assertion helper
@@ -146,7 +151,7 @@ class TestCommit(TestCommitSerialization):
         assert "files" in stats.total
 
         for _filepath, d in stats.files.items():
-            check_entries(d)
+            check_entries(d, True)
         # END for each stated file
 
         # Check that data is parsed properly.
@@ -317,8 +322,9 @@ class TestCommit(TestCommitSerialization):
         self.assertEqual(self.rorepo.tag("refs/tags/0.1.5").commit.count(), 143)
 
     def test_list(self):
-        # This doesn't work anymore, as we will either attempt getattr with bytes, or compare 20 byte string
-        # with actual 20 byte bytes. This usage makes no sense anyway.
+        # This doesn't work anymore, as we will either attempt getattr with bytes, or
+        # compare 20 byte string with actual 20 byte bytes. This usage makes no sense
+        # anyway.
         assert isinstance(
             Commit.list_items(self.rorepo, "0.1.5", max_count=5)["5117c9c8a4d3af19a9958677e45cda9269de1541"],
             Commit,
@@ -383,8 +389,8 @@ class TestCommit(TestCommitSerialization):
 
         self.assertEqual(cmt.author.name, ncmt.author.name)
         self.assertEqual(cmt.message, ncmt.message)
-        # Actually, it can't be printed in a shell as repr wants to have ascii only
-        # it appears.
+        # Actually, it can't be printed in a shell as repr wants to have ascii only it
+        # appears.
         cmt.author.__repr__()
 
     def test_invalid_commit(self):
@@ -498,7 +504,8 @@ JzJMZDRLQLFvnzqZuCjE
         KEY_2 = "Key"
         VALUE_2 = "Value with inner spaces"
 
-        # Check that the following trailer example is extracted from multiple msg variations.
+        # Check that the following trailer example is extracted from multiple msg
+        # variations.
         TRAILER = f"{KEY_1}: {VALUE_1_1}\n{KEY_2}: {VALUE_2}\n{KEY_1}: {VALUE_1_2}"
         msgs = [
             f"Subject\n\n{TRAILER}\n",

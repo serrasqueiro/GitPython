@@ -4,16 +4,17 @@
 # 3-Clause BSD License: https://opensource.org/license/bsd-3-clause/
 
 import gc
-import os
 import os.path as osp
 import shutil
+import sys
 import tempfile
 
 import ddt
 import pytest
 
-from git import NULL_TREE, Diff, DiffIndex, GitCommandError, Repo, Submodule
+from git import NULL_TREE, Diff, DiffIndex, Diffable, GitCommandError, Repo, Submodule
 from git.cmd import Git
+
 from test.lib import StringProcessAdapter, TestBase, fixture, with_rw_directory
 
 
@@ -271,18 +272,18 @@ class TestDiff(TestBase):
         self.assertEqual(res[10].b_rawpath, b"path/\x80-invalid-unicode-path.txt")
 
         # The "Moves"
-        # NOTE: The path prefixes a/ and b/ here are legit!  We're actually
-        # verifying that it's not "a/a/" that shows up, see the fixture data.
-        self.assertEqual(res[11].a_path, "a/with spaces")  # NOTE: path a/ here legit!
-        self.assertEqual(res[11].b_path, "b/with some spaces")  # NOTE: path b/ here legit!
+        # NOTE: The path prefixes "a/" and "b/" here are legit! We're actually verifying
+        # that it's not "a/a/" that shows up; see the fixture data.
+        self.assertEqual(res[11].a_path, "a/with spaces")  # NOTE: path "a/"" legit!
+        self.assertEqual(res[11].b_path, "b/with some spaces")  # NOTE: path "b/"" legit!
         self.assertEqual(res[12].a_path, "a/ending in a space ")
         self.assertEqual(res[12].b_path, "b/ending with space ")
         self.assertEqual(res[13].a_path, 'a/"with-quotes"')
         self.assertEqual(res[13].b_path, 'b/"with even more quotes"')
 
     def test_diff_patch_format(self):
-        # Test all of the 'old' format diffs for completeness - it should at least
-        # be able to deal with it.
+        # Test all of the 'old' format diffs for completeness - it should at least be
+        # able to deal with it.
         fixtures = (
             "diff_2",
             "diff_2f",
@@ -309,7 +310,7 @@ class TestDiff(TestBase):
         self.assertEqual(diff_index[0].b_path, "file with spaces", repr(diff_index[0].b_path))
 
     @pytest.mark.xfail(
-        os.name == "nt",
+        sys.platform == "win32",
         reason='"Access is denied" when tearDown calls shutil.rmtree',
         raises=PermissionError,
     )
@@ -345,13 +346,14 @@ class TestDiff(TestBase):
         repo.create_tag("2")
 
         diff = repo.commit("1").diff(repo.commit("2"))[0]
-        # If diff is unable to find the commit hashes (looks in wrong repo) the *_blob.size
-        # property will be a string containing exception text, an int indicates success.
+        # If diff is unable to find the commit hashes (looks in wrong repo) the
+        # *_blob.size property will be a string containing exception text, an int
+        # indicates success.
         self.assertIsInstance(diff.a_blob.size, int)
         self.assertIsInstance(diff.b_blob.size, int)
 
     def test_diff_interface(self):
-        # Test a few variations of the main diff routine.
+        """Test a few variations of the main diff routine."""
         assertion_map = {}
         for i, commit in enumerate(self.rorepo.iter_commits("0.1.6", max_count=2)):
             diff_item = commit
@@ -359,7 +361,7 @@ class TestDiff(TestBase):
                 diff_item = commit.tree
             # END use tree every second item
 
-            for other in (None, NULL_TREE, commit.Index, commit.parents[0]):
+            for other in (None, NULL_TREE, commit.INDEX, commit.parents[0]):
                 for paths in (None, "CHANGES", ("CHANGES", "lib")):
                     for create_patch in range(2):
                         diff_index = diff_item.diff(other=other, paths=paths, create_patch=create_patch)
@@ -392,9 +394,9 @@ class TestDiff(TestBase):
             # END for each other side
         # END for each commit
 
-        # Assert that we could always find at least one instance of the members we
-        # can iterate in the diff index - if not this indicates its not working correctly
-        # or our test does not span the whole range of possibilities.
+        # Assert that we could always find at least one instance of the members we can
+        # iterate in the diff index - if not this indicates its not working correctly or
+        # our test does not span the whole range of possibilities.
         for key, value in assertion_map.items():
             self.assertIsNotNone(value, "Did not find diff for %s" % key)
         # END for each iteration type
@@ -405,10 +407,22 @@ class TestDiff(TestBase):
         diff_index = c.diff(cp, ["does/not/exist"])
         self.assertEqual(len(diff_index), 0)
 
+    def test_diff_interface_stability(self):
+        """Test that the Diffable.Index redefinition should not break compatibility."""
+        self.assertIs(
+            Diffable.Index,
+            Diffable.INDEX,
+            "The old and new class attribute names must be aliases.",
+        )
+        self.assertIs(
+            type(Diffable.INDEX).__eq__,
+            object.__eq__,
+            "Equality comparison must be reference-based.",
+        )
+
     @with_rw_directory
     def test_rename_override(self, rw_dir):
-        """Test disabling of diff rename detection"""
-
+        """Test disabling of diff rename detection."""
         # Create and commit file_a.txt.
         repo = Repo.init(rw_dir)
         file_a = osp.join(rw_dir, "file_a.txt")
@@ -473,3 +487,64 @@ class TestDiff(TestBase):
         self.assertEqual(True, diff.renamed_file)
         self.assertEqual("file_a.txt", diff.rename_from)
         self.assertEqual("file_b.txt", diff.rename_to)
+
+    @with_rw_directory
+    def test_diff_patch_with_external_engine(self, rw_dir):
+        repo = Repo.init(rw_dir)
+        gitignore = osp.join(rw_dir, ".gitignore")
+
+        # First commit
+        with open(gitignore, "w") as f:
+            f.write("first_line\n")
+        repo.git.add(".gitignore")
+        repo.index.commit("first commit")
+
+        # Adding second line and committing
+        with open(gitignore, "a") as f:
+            f.write("second_line\n")
+        repo.git.add(".gitignore")
+        repo.index.commit("second commit")
+
+        # Adding third line and staging
+        with open(gitignore, "a") as f:
+            f.write("third_line\n")
+        repo.git.add(".gitignore")
+
+        # Adding fourth line
+        with open(gitignore, "a") as f:
+            f.write("fourth_line\n")
+
+        # Set the external diff engine
+        with repo.config_writer(config_level="repository") as writer:
+            writer.set_value("diff", "external", "bogus_diff_engine")
+
+        head_against_head = repo.head.commit.diff("HEAD^", create_patch=True)
+        self.assertEqual(len(head_against_head), 1)
+        head_against_index = repo.head.commit.diff(create_patch=True)
+        self.assertEqual(len(head_against_index), 1)
+        head_against_working_tree = repo.head.commit.diff(None, create_patch=True)
+        self.assertEqual(len(head_against_working_tree), 1)
+
+        index_against_head = repo.index.diff("HEAD", create_patch=True)
+        self.assertEqual(len(index_against_head), 1)
+        index_against_working_tree = repo.index.diff(None, create_patch=True)
+        self.assertEqual(len(index_against_working_tree), 1)
+
+    @with_rw_directory
+    def test_beginning_space(self, rw_dir):
+        # Create a file beginning by a whitespace
+        repo = Repo.init(rw_dir)
+        file = osp.join(rw_dir, " file.txt")
+        with open(file, "w") as f:
+            f.write("hello world")
+        repo.git.add(Git.polish_url(file))
+        repo.index.commit("first commit")
+
+        # Diff the commit with an empty tree
+        # and check the paths
+        diff_index = repo.head.commit.diff(NULL_TREE)
+        d = diff_index[0]
+        a_path = d.a_path
+        b_path = d.b_path
+        self.assertEqual(a_path, " file.txt")
+        self.assertEqual(b_path, " file.txt")

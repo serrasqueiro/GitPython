@@ -7,6 +7,7 @@ import glob
 import io
 import os
 import os.path as osp
+import sys
 from unittest import mock
 
 import pytest
@@ -14,8 +15,8 @@ import pytest
 from git import GitConfigParser
 from git.config import _OMD, cp
 from git.util import rmfile
-from test.lib import SkipTest, TestCase, fixture_path, with_rw_directory
 
+from test.lib import SkipTest, TestCase, fixture_path, with_rw_directory
 
 _tc_lock_fpaths = osp.join(osp.dirname(__file__), "fixtures/*.lock")
 
@@ -41,7 +42,7 @@ class TestBase(TestCase):
         return sio
 
     def test_read_write(self):
-        # writer must create the exact same file as the one read before
+        # The writer must create the exact same file as the one read before.
         for filename in ("git_config", "git_config_global"):
             file_obj = self._to_memcache(fixture_path(filename))
             with GitConfigParser(file_obj, read_only=False) as w_config:
@@ -56,7 +57,8 @@ class TestBase(TestCase):
                     self._to_memcache(fixture_path(filename)).getvalue(),
                 )
 
-                # Creating an additional config writer must fail due to exclusive access.
+                # Creating an additional config writer must fail due to exclusive
+                # access.
                 with self.assertRaises(IOError):
                     GitConfigParser(file_obj, read_only=False)
 
@@ -91,8 +93,8 @@ class TestBase(TestCase):
             r_config.read()  # Enforce reading.
             # Simple inclusions, again checking them taking precedence.
             assert r_config.get_value("sec", "var0") == "value0_included"
-            # This one should take the git_config_global value since included
-            # values must be considered as soon as they get them.
+            # This one should take the git_config_global value since included values
+            # must be considered as soon as they get them.
             assert r_config.get_value("diff", "tool") == "meld"
             try:
                 # FIXME: Split this assertion out somehow and mark it xfail (or fix it).
@@ -109,7 +111,8 @@ class TestBase(TestCase):
         # Entering again locks the file again...
         with gcp as cw:
             cw.set_value("include", "some_other_value", "b")
-            # ...so creating an additional config writer must fail due to exclusive access.
+            # ...so creating an additional config writer must fail due to exclusive
+            # access.
             with self.assertRaises(IOError):
                 GitConfigParser(fpl, read_only=False)
         # but work when the lock is removed
@@ -138,6 +141,14 @@ class TestBase(TestCase):
                 " --abbrev-commit --date=relative",
             )
             self.assertEqual(len(config.sections()), 23)
+
+    def test_config_value_with_trailing_new_line(self):
+        config_content = b'[section-header]\nkey:"value\n"'
+        config_file = io.BytesIO(config_content)
+        config_file.name = "multiline_value.config"
+
+        git_config = GitConfigParser(config_file)
+        git_config.read()  # This should not throw an exception
 
     def test_base(self):
         path_repo = fixture_path("git_config")
@@ -236,7 +247,7 @@ class TestBase(TestCase):
             check_test_value(cr, tv)
 
     @pytest.mark.xfail(
-        os.name == "nt",
+        sys.platform == "win32",
         reason='Second config._has_includes() assertion fails (for "config is included if path is matching git_dir")',
         raises=AssertionError,
     )
@@ -362,6 +373,41 @@ class TestBase(TestCase):
             assert not config._has_includes()
             assert config._included_paths() == []
 
+    @with_rw_directory
+    def test_conditional_includes_remote_url(self, rw_dir):
+        # Initiate mocked repository.
+        repo = mock.Mock()
+        repo.remotes = [mock.Mock(url="https://github.com/foo/repo")]
+
+        # Initiate config files.
+        path1 = osp.join(rw_dir, "config1")
+        path2 = osp.join(rw_dir, "config2")
+        template = '[includeIf "hasconfig:remote.*.url:{}"]\n    path={}\n'
+
+        # Ensure that config with hasconfig and full url is correct.
+        with open(path1, "w") as stream:
+            stream.write(template.format("https://github.com/foo/repo", path2))
+
+        with GitConfigParser(path1, repo=repo) as config:
+            assert config._has_includes()
+            assert config._included_paths() == [("path", path2)]
+
+        # Ensure that config with hasconfig and incorrect url is incorrect.
+        with open(path1, "w") as stream:
+            stream.write(template.format("incorrect", path2))
+
+        with GitConfigParser(path1, repo=repo) as config:
+            assert not config._has_includes()
+            assert config._included_paths() == []
+
+        # Ensure that config with hasconfig and url using glob pattern is correct.
+        with open(path1, "w") as stream:
+            stream.write(template.format("**/**github.com*/**", path2))
+
+        with GitConfigParser(path1, repo=repo) as config:
+            assert config._has_includes()
+            assert config._included_paths() == [("path", path2)]
+
     def test_rename(self):
         file_obj = self._to_memcache(fixture_path("git_config"))
         with GitConfigParser(file_obj, read_only=False, merge_includes=False) as cw:
@@ -380,12 +426,16 @@ class TestBase(TestCase):
         with GitConfigParser(file_obj, read_only=False) as w_config:
             self.assertEqual(
                 w_config.get("alias", "rbi"),
-                '"!g() { git rebase -i origin/${1:-master} ; } ; g"',
+                "!g() { git rebase -i origin/${1:-master} ; } ; g",
             )
         self.assertEqual(
             file_obj.getvalue(),
             self._to_memcache(fixture_path(".gitconfig")).getvalue(),
         )
+
+    def test_config_with_extra_whitespace(self):
+        cr = GitConfigParser(fixture_path("git_config_with_extra_whitespace"), read_only=True)
+        self.assertEqual(cr.get("init", "defaultBranch"), "trunk")
 
     def test_empty_config_value(self):
         cr = GitConfigParser(fixture_path("git_config_with_empty_value"), read_only=True)
@@ -394,6 +444,44 @@ class TestBase(TestCase):
 
         with self.assertRaises(cp.NoOptionError):
             cr.get_value("color", "ui")
+
+    def test_config_with_quotes(self):
+        cr = GitConfigParser(fixture_path("git_config_with_quotes"), read_only=True)
+
+        self.assertEqual(cr.get("user", "name"), "Cody Veal")
+        self.assertEqual(cr.get("user", "email"), "cveal05@gmail.com")
+
+    def test_config_with_empty_quotes(self):
+        cr = GitConfigParser(fixture_path("git_config_with_empty_quotes"), read_only=True)
+        self.assertEqual(cr.get("core", "filemode"), "", "quotes can form a literal empty string as value")
+
+    def test_config_with_quotes_with_literal_whitespace(self):
+        cr = GitConfigParser(fixture_path("git_config_with_quotes_whitespace_inside"), read_only=True)
+        self.assertEqual(cr.get("core", "commentString"), "# ")
+
+    def test_config_with_quotes_with_whitespace_outside_value(self):
+        cr = GitConfigParser(fixture_path("git_config_with_quotes_whitespace_outside"), read_only=True)
+        self.assertEqual(cr.get("init", "defaultBranch"), "trunk")
+
+    def test_config_with_quotes_containing_escapes(self):
+        """For now just suppress quote removal. But it would be good to interpret most of these."""
+        cr = GitConfigParser(fixture_path("git_config_with_quotes_escapes"), read_only=True)
+
+        # These can eventually be supported by substituting the represented character.
+        self.assertEqual(cr.get("custom", "hasnewline"), R'"first\nsecond"')
+        self.assertEqual(cr.get("custom", "hasbackslash"), R'"foo\\bar"')
+        self.assertEqual(cr.get("custom", "hasquote"), R'"ab\"cd"')
+        self.assertEqual(cr.get("custom", "hastrailingbackslash"), R'"word\\"')
+        self.assertEqual(cr.get("custom", "hasunrecognized"), R'"p\qrs"')
+
+        # It is less obvious whether and what to eventually do with this.
+        self.assertEqual(cr.get("custom", "hasunescapedquotes"), '"ab"cd"e"')
+
+        # Cases where quote removal is clearly safe should happen even after those.
+        self.assertEqual(cr.get("custom", "ordinary"), "hello world")
+
+        # Cases without quotes should still parse correctly even after those, too.
+        self.assertEqual(cr.get("custom", "unquoted"), "good evening")
 
     def test_get_values_works_without_requiring_any_other_calls_first(self):
         file_obj = self._to_memcache(fixture_path("git_config_multiple"))
